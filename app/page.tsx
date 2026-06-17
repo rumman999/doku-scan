@@ -81,9 +81,13 @@ export default function LibraryPage() {
                   size="icon"
                   className="rounded-full hover:bg-secondary"
                   aria-label="Settings"
-                >
-                  <Settings className="size-5" />
-                </Button>
+                  nativeButton={false}
+                  render={
+                    <Link href="/settings">
+                      <Settings className="size-5" />
+                    </Link>
+                  }
+                />
               </div>
             </>
           )}
