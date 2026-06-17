@@ -6,10 +6,12 @@ import { ArrowLeft, Settings, FileDown, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { CropView } from "@/components/crop-view"
 import { FilterBar } from "@/components/filter-bar"
+import { PdfExportSheet } from "@/components/pdf-export-sheet"
 
 export default function Page() {
   const [filter, setFilter] = useState("original")
   const [resetKey, setResetKey] = useState(0)
+  const [exportOpen, setExportOpen] = useState(false)
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-background text-foreground">
@@ -64,12 +66,15 @@ export default function Page() {
       <div className="pointer-events-none sticky bottom-0 z-10 flex justify-end p-5">
         <Button
           size="lg"
+          onClick={() => setExportOpen(true)}
           className="pointer-events-auto h-14 gap-2 rounded-full px-6 text-base font-semibold shadow-xl shadow-primary/30"
         >
           <FileDown className="size-5" />
           Save PDF
         </Button>
       </div>
+
+      <PdfExportSheet open={exportOpen} onClose={() => setExportOpen(false)} />
     </main>
   )
 }
