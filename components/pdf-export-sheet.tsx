@@ -115,12 +115,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function Reveal({ open, children }: { open: boolean; children: React.ReactNode }) {
   return (
     <div
+      aria-hidden={!open}
       className={cn(
-        "grid transition-all duration-300 ease-out",
-        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        "transition-opacity duration-300 ease-out",
+        open ? "opacity-100" : "pointer-events-none opacity-0",
       )}
     >
-      <div className="overflow-hidden">{children}</div>
+      {children}
     </div>
   )
 }
