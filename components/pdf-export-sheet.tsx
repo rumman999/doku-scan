@@ -26,14 +26,14 @@ function Toggle({
       aria-label={label}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        checked ? "bg-primary" : "bg-input",
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-300 ease-in-out outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        checked ? "border-primary bg-primary" : "border-border bg-secondary",
       )}
     >
       <span
         className={cn(
-          "inline-block size-5 transform rounded-full bg-card shadow-sm transition-transform duration-200",
-          checked ? "translate-x-5" : "translate-x-0.5",
+          "inline-block size-4 transform rounded-full bg-card shadow-sm ring-1 ring-foreground/10 transition-transform duration-300 ease-in-out",
+          checked ? "translate-x-[22px]" : "translate-x-0.5",
         )}
       />
     </button>
@@ -109,6 +109,19 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <p className="px-1 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
       {children}
     </p>
+  )
+}
+
+function Reveal({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "grid transition-all duration-300 ease-out",
+        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+      )}
+    >
+      <div className="overflow-hidden">{children}</div>
+    </div>
   )
 }
 
@@ -249,7 +262,7 @@ export function PdfExportSheet({
               <Row icon={<Stamp className="size-4" />} title="Add Custom Watermark" description="Stamp text across each page">
                 <Toggle checked={watermarkOn} onChange={setWatermarkOn} label="Toggle watermark" />
               </Row>
-              {watermarkOn ? (
+              <Reveal open={watermarkOn}>
                 <div className="px-4 pb-4">
                   <input
                     type="text"
@@ -263,7 +276,7 @@ export function PdfExportSheet({
                     {watermarkText.length}/40 characters
                   </p>
                 </div>
-              ) : null}
+              </Reveal>
             </div>
           </div>
 
@@ -278,7 +291,7 @@ export function PdfExportSheet({
               >
                 <Toggle checked={passwordOn} onChange={setPasswordOn} label="Toggle password protection" />
               </Row>
-              {passwordOn ? (
+              <Reveal open={passwordOn}>
                 <div className="flex flex-col gap-3 px-4 pb-4">
                   <div className="relative">
                     <input
@@ -315,7 +328,7 @@ export function PdfExportSheet({
                     <p className="px-1 text-[11px] text-muted-foreground">Use at least 4 characters</p>
                   )}
                 </div>
-              ) : null}
+              </Reveal>
             </div>
           </div>
         </div>
