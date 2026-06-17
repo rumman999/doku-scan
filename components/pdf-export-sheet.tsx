@@ -224,7 +224,7 @@ export function PdfExportSheet({
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto px-5 pb-4">
+        <div className="scrollbar-minimal flex-1 overflow-y-auto px-5 pb-4">
           {/* Document section */}
           <SectionLabel>Document</SectionLabel>
           <div className="divide-y divide-border rounded-2xl border border-border bg-card">
