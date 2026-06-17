@@ -117,11 +117,11 @@ function Reveal({ open, children }: { open: boolean; children: React.ReactNode }
     <div
       aria-hidden={!open}
       className={cn(
-        "transition-opacity duration-300 ease-out",
-        open ? "opacity-100" : "pointer-events-none opacity-0",
+        "grid transition-[grid-template-rows,opacity] duration-300 ease-out",
+        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
       )}
     >
-      {children}
+      <div className={cn("min-h-0 overflow-hidden", !open && "pointer-events-none")}>{children}</div>
     </div>
   )
 }
