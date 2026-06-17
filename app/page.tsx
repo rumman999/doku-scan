@@ -9,6 +9,7 @@ import { FOLDERS, DOCUMENTS } from "@/lib/library-data"
 import { FolderCard } from "@/components/folder-card"
 import { DocCard } from "@/components/doc-card"
 import { SelectionBar } from "@/components/selection-bar"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 export default function LibraryPage() {
   const [view, setView] = useState<"grid" | "list">("grid")
@@ -73,14 +74,17 @@ export default function LibraryPage() {
           ) : (
             <>
               <h1 className="text-2xl font-bold tracking-tight">Documents</h1>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="-mr-2 rounded-full hover:bg-secondary"
-                aria-label="Settings"
-              >
-                <Settings className="size-5" />
-              </Button>
+              <div className="-mr-2 flex items-center">
+                <ThemeToggle className="rounded-full hover:bg-secondary" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full hover:bg-secondary"
+                  aria-label="Settings"
+                >
+                  <Settings className="size-5" />
+                </Button>
+              </div>
             </>
           )}
         </div>
