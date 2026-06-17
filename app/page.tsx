@@ -177,6 +177,7 @@ export default function LibraryPage() {
               size="icon"
               className="pointer-events-auto size-14 rounded-full shadow-xl shadow-primary/30"
               aria-label="New scan"
+              nativeButton={false}
               render={
                 <Link href="/scan">
                   <Camera className="size-6" />
