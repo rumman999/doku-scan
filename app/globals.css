@@ -153,3 +153,12 @@
     background-color: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
   }
 }
+
+/* Fully hidden scrollbar (scrolling still works) */
+@utility scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
