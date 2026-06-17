@@ -20,6 +20,7 @@ export default function Page() {
           size="icon"
           className="rounded-full text-foreground hover:bg-secondary"
           aria-label="Go back"
+          nativeButton={false}
           render={
             <Link href="/">
               <ArrowLeft className="size-5" />
