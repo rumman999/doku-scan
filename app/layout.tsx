@@ -14,6 +14,12 @@ export const metadata: Metadata = {
   title: 'Document Scanner',
   description: 'Scan, crop, and enhance documents into clean PDFs',
   generator: 'v0.app',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Document Scanner',
+  },
   icons: {
     icon: [
       {
@@ -34,6 +40,10 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   colorScheme: 'light dark',
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: 'white' },

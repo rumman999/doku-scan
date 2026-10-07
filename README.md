@@ -1,33 +1,47 @@
-# document-scanner-67
+# DokuScan MVP
 
-This is a [Next.js](https://nextjs.org) project bootstrapped with [v0](https://v0.app).
+A fully offline, local-first document scanning application built with Next.js and natively packaged for mobile devices via Capacitor.
 
-## Built with v0
+## Features
+- **Native Camera Capture**: Snaps high-quality document photos directly via the device's native camera plugin (Capacitor), circumventing mobile browser memory limitations.
+- **Client-Side Cropping**: Adjust the perspective and borders of your document cleanly using `react-image-crop` and HTML5 Canvas.
+- **Multi-Page Support**: Continuously scan and append as many pages as you need into a single local gallery state before finalizing.
+- **Native PDF Export**: Generates an A4 PDF containing all scanned pages perfectly fit using `jspdf`, and seamlessly writes the raw binary directly to the Android/iOS filesystem via `@capacitor/filesystem`.
+- **Zero API Footprint**: Works completely offline.
 
-This repository is linked to a [v0](https://v0.app) project. You can continue developing by visiting the link below -- start new chats to make changes, and v0 will push commits directly to this repo. Every merge to `main` will automatically deploy.
+## Architecture & Stack
+- **Framework**: Next.js 14 (App Router, Static Export)
+- **UI & Styling**: Tailwind CSS, Shadcn UI, Lucide Icons
+- **Native Shell**: CapacitorJS (iOS & Android)
+- **Filesystem**: @capacitor/filesystem
+- **PDF Generation**: jsPDF
 
-[Continue working on v0 →](https://v0.app/chat/projects/prj_9UZMt7oT9e3p9ivR2F2hdInRwH5G)
+## Local Development
 
-## Getting Started
-
-First, run the development server:
-
+### 1. Web Preview
+To preview and test the application in a local browser with PWA elements injected (for camera emulation):
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+pnpm install
 pnpm dev
 ```
+*Note: A fallback web camera UI will slide up to allow testing the crop and OCR flows without a physical device.*
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Native Mobile Development
+Since this project is configured for static export (`output: 'export'`), you must build the web assets before synchronizing them to the native shell.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+# 1. Build the static Next.js export (/out)
+pnpm build
 
-## Learn More
+# 2. Sync the assets to iOS and Android
+npx cap sync
 
-To learn more, take a look at the following resources:
+# 3. Open the native IDEs to build and deploy to a device
+npx cap open ios
+npx cap open android
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-- [v0 Documentation](https://v0.app/docs) - learn about v0 and how to use it.
+## Maintenance Notes
+- **Filesystem Access**: Native export requires correct OS permissions for writing to the `Documents` directory. 
+- **Static Assets**: The `next.config.mjs` disables Image optimization (`unoptimized: true`) as required by native static environments.
+- **State Handoff**: `sessionStorage` is utilized to safely proxy captured blob URLs between the Library page and the Scanner UI before they are actively cropped.

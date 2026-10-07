@@ -1,8 +1,11 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Search, LayoutGrid, List, Camera, X, Settings } from "lucide-react"
+import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera'
+import { defineCustomElements } from '@ionic/pwa-elements/loader'
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { FOLDERS, DOCUMENTS } from "@/lib/library-data"
@@ -12,6 +15,28 @@ import { SelectionBar } from "@/components/selection-bar"
 import { ThemeToggle } from "@/components/theme-toggle"
 
 export default function LibraryPage() {
+  const router = useRouter()
+
+  useEffect(() => {
+    defineCustomElements(window)
+  }, [])
+
+  const takePhoto = async () => {
+    try {
+      const image = await CapacitorCamera.getPhoto({
+        quality: 100,
+        allowEditing: false,
+        resultType: CameraResultType.Uri,
+        source: CameraSource.Camera
+      });
+      if (image.webPath) {
+        sessionStorage.setItem("scanImage", image.webPath);
+        router.push("/scan");
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  };
   const [view, setView] = useState<"grid" | "list">("grid")
   const [query, setQuery] = useState("")
   const [selectionMode, setSelectionMode] = useState(false)
@@ -181,17 +206,13 @@ export default function LibraryPage() {
           <SelectionBar count={selected.size} />
         ) : (
           <div className="mx-auto flex max-w-md justify-end p-5">
-            <Button
-              size="icon"
-              className="pointer-events-auto size-14 rounded-full shadow-xl shadow-primary/30"
+            <button
+              onClick={takePhoto}
+              className="pointer-events-auto flex size-14 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/30"
               aria-label="New scan"
-              nativeButton={false}
-              render={
-                <Link href="/scan">
-                  <Camera className="size-6" />
-                </Link>
-              }
-            />
+            >
+              <Camera className="size-6" />
+            </button>
           </div>
         )}
       </div>
