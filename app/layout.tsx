@@ -11,14 +11,14 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Document Scanner',
+  title: 'Doku Scan',
   description: 'Scan, crop, and enhance documents into clean PDFs',
   generator: 'v0.app',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Document Scanner',
+    title: 'Doku Scan',
   },
   icons: {
     icon: [

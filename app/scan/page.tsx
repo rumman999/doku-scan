@@ -64,6 +64,16 @@ export default function Page() {
       const pdfBase64 = doc.output('datauristring').split(',')[1];
       const fileName = `Scanned_Document_${Date.now()}.pdf`;
       
+      try {
+        const perms = await Filesystem.checkPermissions();
+        if (perms.publicStorage !== 'granted') {
+          await Filesystem.requestPermissions();
+        }
+      } catch (err) {
+        // Will fail silently in web view, perfectly fine
+        console.log("Permission check skipped on web");
+      }
+
       await Filesystem.writeFile({
         path: fileName,
         data: pdfBase64,

@@ -38,3 +38,6 @@ __v0_jsx-dev-runtime.ts
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# scratch assets
+/logos/

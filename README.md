@@ -1,4 +1,8 @@
-# DokuScan MVP
+<div align="center">
+  <img src="public/icon.svg" alt="Doku Scan Logo" width="160" height="160" />
+</div>
+
+# Doku Scan MVP
 
 A fully offline, local-first document scanning application built with Next.js and natively packaged for mobile devices via Capacitor.
 

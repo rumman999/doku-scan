@@ -1,6 +1,6 @@
 {
-  "name": "Document Scanner",
-  "short_name": "Scanner",
+  "name": "Doku Scan",
+  "short_name": "Doku Scan",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
