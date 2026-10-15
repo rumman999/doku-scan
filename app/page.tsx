@@ -1,11 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Search, LayoutGrid, List, Camera, X, Settings } from "lucide-react"
-import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera'
-import { defineCustomElements } from '@ionic/pwa-elements/loader'
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { FOLDERS, DOCUMENTS } from "@/lib/library-data"
@@ -17,26 +15,6 @@ import { ThemeToggle } from "@/components/theme-toggle"
 export default function LibraryPage() {
   const router = useRouter()
 
-  useEffect(() => {
-    defineCustomElements(window)
-  }, [])
-
-  const takePhoto = async () => {
-    try {
-      const image = await CapacitorCamera.getPhoto({
-        quality: 100,
-        allowEditing: false,
-        resultType: CameraResultType.Uri,
-        source: CameraSource.Camera
-      });
-      if (image.webPath) {
-        sessionStorage.setItem("scanImage", image.webPath);
-        router.push("/scan");
-      }
-    } catch (e) {
-      console.error(e)
-    }
-  };
   const [view, setView] = useState<"grid" | "list">("grid")
   const [query, setQuery] = useState("")
   const [selectionMode, setSelectionMode] = useState(false)
@@ -207,7 +185,7 @@ export default function LibraryPage() {
         ) : (
           <div className="mx-auto flex max-w-md justify-end p-5">
             <button
-              onClick={takePhoto}
+              onClick={() => router.push("/scan")}
               className="pointer-events-auto flex size-14 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/30"
               aria-label="New scan"
             >

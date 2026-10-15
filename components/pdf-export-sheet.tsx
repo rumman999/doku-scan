@@ -2,12 +2,19 @@
 
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
-import { X, FileDown, ShieldCheck, ImageIcon, FileText, Stamp, Eye, EyeOff } from "lucide-react"
+import { X, FileDown, ShieldCheck, ImageIcon, FileText, Stamp, Eye, EyeOff, Loader2, Layers } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { SortablePageGrid } from "@/components/sortable-page-grid"
+import type { BatchPage } from "@/hooks/use-scan-batch"
+import {
+  buildPdf,
+  defaultPdfFilename,
+  deliverPdf,
+  type DeliveryResult,
+  type PageSize,
+  type Quality,
+} from "@/lib/pdf/export-pdf"
 import { cn } from "@/lib/utils"
-
-type PageSize = "a4" | "letter" | "auto"
-type Quality = "high" | "medium" | "low"
 
 function Toggle({
   checked,
@@ -129,9 +136,17 @@ function Reveal({ open, children }: { open: boolean; children: React.ReactNode }
 export function PdfExportSheet({
   open,
   onClose,
+  pages,
+  onReorder,
+  onRemove,
+  onExported,
 }: {
   open: boolean
   onClose: () => void
+  pages: BatchPage[]
+  onReorder: (orderedIds: string[]) => void
+  onRemove: (id: string) => void
+  onExported?: (result: DeliveryResult) => void
 }) {
   const [mounted, setMounted] = useState(false)
   const [visible, setVisible] = useState(false)
@@ -144,6 +159,9 @@ export function PdfExportSheet({
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [showPassword, setShowPassword] = useState(false)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const exporting = progress !== null
 
   useEffect(() => setMounted(true), [])
 
@@ -164,16 +182,44 @@ export function PdfExportSheet({
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose()
+      if (e.key === "Escape" && !exporting) onClose()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [open, onClose])
+  }, [open, onClose, exporting])
 
   if (!mounted) return null
 
+  async function handleGenerate() {
+    setExportError(null)
+    setProgress({ done: 0, total: pages.length })
+    try {
+      const filename = defaultPdfFilename()
+      const blob = await buildPdf(
+        pages,
+        {
+          pageSize,
+          quality,
+          watermark: watermarkOn ? watermarkText : undefined,
+          password: passwordOn ? password : undefined,
+        },
+        setProgress,
+      )
+      const result = await deliverPdf(blob, filename)
+      onExported?.(result)
+      if (result !== "cancelled") onClose()
+    } catch (err) {
+      console.error("[PDF Export]", err)
+      setExportError(err instanceof Error ? err.message : "Export failed")
+    } finally {
+      setProgress(null)
+    }
+  }
+
   const passwordMismatch = passwordOn && confirm.length > 0 && password !== confirm
   const canGenerate =
+    pages.length > 0 &&
+    !exporting &&
     (!watermarkOn || watermarkText.trim().length > 0) &&
     (!passwordOn || (password.length >= 4 && password === confirm))
 
@@ -189,7 +235,7 @@ export function PdfExportSheet({
       <button
         type="button"
         aria-label="Close"
-        onClick={onClose}
+        onClick={exporting ? undefined : onClose}
         className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
       />
 
@@ -216,6 +262,7 @@ export function PdfExportSheet({
               size="icon"
               className="rounded-full hover:bg-secondary"
               aria-label="Close"
+              disabled={exporting}
               onClick={onClose}
             >
               <X className="size-5" />
@@ -225,6 +272,26 @@ export function PdfExportSheet({
 
         {/* Scrollable content */}
         <div className="scrollbar-minimal flex-1 overflow-y-auto px-5 pb-4">
+          {/* Pages section */}
+          <div className="flex items-baseline justify-between">
+            <SectionLabel>
+              Pages{pages.length > 0 ? ` · ${pages.length}` : ""}
+            </SectionLabel>
+            {pages.length > 1 ? (
+              <p className="px-1 pb-2 text-[11px] text-muted-foreground">Hold &amp; drag to reorder</p>
+            ) : null}
+          </div>
+          <div className="mb-5 rounded-2xl border border-border bg-card p-3">
+            {pages.length > 0 ? (
+              <SortablePageGrid pages={pages} onReorder={onReorder} onRemove={onRemove} />
+            ) : (
+              <div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
+                <Layers className="size-6" />
+                <p className="text-sm">No pages scanned yet</p>
+              </div>
+            )}
+          </div>
+
           {/* Document section */}
           <SectionLabel>Document</SectionLabel>
           <div className="divide-y divide-border rounded-2xl border border-border bg-card">
@@ -339,14 +406,32 @@ export function PdfExportSheet({
           className="shrink-0 border-t border-border bg-background px-5 pt-3"
           style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
         >
+          {exportError ? (
+            <p role="alert" className="mb-2 px-1 text-xs font-medium text-destructive">
+              {exportError}
+            </p>
+          ) : null}
           <Button
             size="lg"
             disabled={!canGenerate}
-            onClick={onClose}
-            className="h-13 w-full gap-2 rounded-2xl py-3.5 text-base font-semibold shadow-lg shadow-primary/25"
+            onClick={handleGenerate}
+            className="relative h-13 w-full gap-2 overflow-hidden rounded-2xl py-3.5 text-base font-semibold shadow-lg shadow-primary/25"
           >
-            <FileDown className="size-5" />
-            Generate PDF
+            {progress ? (
+              <span
+                aria-hidden
+                className="absolute inset-y-0 left-0 bg-primary-foreground/15 transition-[width] duration-200"
+                style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }}
+              />
+            ) : null}
+            {progress ? <Loader2 className="size-5 animate-spin" /> : <FileDown className="size-5" />}
+            <span aria-live="polite">
+              {progress
+                ? progress.done < progress.total
+                  ? `Processing page ${progress.done + 1} of ${progress.total}`
+                  : "Finalizing PDF…"
+                : `Generate PDF${pages.length > 1 ? ` (${pages.length} pages)` : ""}`}
+            </span>
           </Button>
         </div>
       </div>

@@ -1,0 +1,2 @@
+# Vendored OpenCV.js 4.8.0 (docs.opencv.org): keep byte-identical, no EOL conversion
+public/opencv.js -text -diff linguist-vendored

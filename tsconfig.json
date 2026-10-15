@@ -3,7 +3,8 @@
     "lib": [
       "dom",
       "dom.iterable",
-      "esnext"
+      "esnext",
+      "WebWorker"
     ],
     "allowJs": true,
     "target": "ES6",
@@ -36,6 +37,9 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "out",
+    "android",
+    "ios"
   ]
 }
