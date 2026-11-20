@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { listDocuments, type DocumentSummary } from "@/lib/db/indexed-db"
+import { LIBRARY_CHANGED_EVENT } from "@/lib/drive/backup"
 
 export interface LibraryDocument extends Omit<DocumentSummary, "cover"> {
   /** Object URL of the first page's thumbnail; owned and revoked by the hook. */
@@ -46,8 +47,11 @@ export function useDocuments() {
       if (document.visibilityState === "visible") refresh()
     }
     document.addEventListener("visibilitychange", onVisible)
+    // A backup sync restored or removed documents.
+    window.addEventListener(LIBRARY_CHANGED_EVENT, refresh)
     return () => {
       document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, refresh)
       generationRef.current++
       urlsRef.current.forEach((u) => URL.revokeObjectURL(u))
       urlsRef.current = []

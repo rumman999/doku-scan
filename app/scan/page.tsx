@@ -11,6 +11,7 @@ import { FilterReview } from "@/components/filter-review"
 import { useScanBatch } from "@/hooks/use-scan-batch"
 import { appendSessionToDocument, createDocumentFromSession } from "@/lib/db/indexed-db"
 import { loadSettings, type ScanFilter } from "@/lib/settings"
+import { scheduleBackup } from "@/lib/drive/backup"
 import { cn } from "@/lib/utils"
 import { documentProcessor } from "@/lib/cv/processor-client"
 import type { Point } from "@/lib/cv/document-processor"
@@ -599,6 +600,7 @@ function ScanScreen() {
     if (docId) await appendSessionToDocument(sessionId, docId)
     else docId = (await createDocumentFromSession(sessionId)).id
     source.forget()
+    scheduleBackup()
     router.replace(`/doc?id=${encodeURIComponent(docId)}`)
   }
 

@@ -18,6 +18,7 @@ import {
   type StoredDocument,
 } from "@/lib/db/indexed-db"
 import { formatDocDate, pdfFilename, pluralPages } from "@/lib/format"
+import { scheduleBackup } from "@/lib/drive/backup"
 
 export default function DocumentPage() {
   return (
@@ -78,6 +79,9 @@ function DocumentView() {
   useEffect(() => {
     if (ready && doc && pages.length === 0) router.replace("/")
   }, [ready, doc, pages.length, router])
+
+  // Edits here (rename, reorder, remove) are backed up once the user leaves.
+  useEffect(() => () => scheduleBackup(), [])
 
   useEffect(() => {
     if (renaming) nameInputRef.current?.select()

@@ -16,9 +16,11 @@
  */
 
 const DB_NAME = "dokuscan"
-const DB_VERSION = 2
+const DB_VERSION = 3
 const PAGES_STORE = "pages"
 const DOCS_STORE = "documents"
+/** Ids of deleted documents, so a linked backup can trash its copy on the next sync. */
+const TOMBSTONES_STORE = "tombstones"
 const SESSION_INDEX = "bySession"
 
 /** Default batch id. A single in-progress batch survives reloads/crashes. */
@@ -101,6 +103,9 @@ export function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(DOCS_STORE)) {
         db.createObjectStore(DOCS_STORE, { keyPath: "id" })
+      }
+      if (!db.objectStoreNames.contains(TOMBSTONES_STORE)) {
+        db.createObjectStore(TOMBSTONES_STORE, { keyPath: "docId" })
       }
     }
 
@@ -250,7 +255,7 @@ export async function reorderPages(
  */
 export async function deletePage(id: string, sessionId: string = DEFAULT_SESSION): Promise<void> {
   const db = await openDb()
-  const tx = db.transaction([PAGES_STORE, DOCS_STORE], "readwrite")
+  const tx = db.transaction([PAGES_STORE, DOCS_STORE, TOMBSTONES_STORE], "readwrite")
   const store = tx.objectStore(PAGES_STORE)
   const docs = tx.objectStore(DOCS_STORE)
   await requestToPromise(store.delete(id))
@@ -264,8 +269,10 @@ export async function deletePage(id: string, sessionId: string = DEFAULT_SESSION
   await applyOrder(store, sessionId, new Map(remaining.map((r, i) => [r.id, i])))
 
   const docId = docIdFromSession(sessionId)
-  if (docId && remaining.length === 0) docs.delete(docId)
-  else await touchDocument(docs, sessionId)
+  if (docId && remaining.length === 0) {
+    docs.delete(docId)
+    tombstone(tx, docId)
+  } else await touchDocument(docs, sessionId)
   await txDone(tx)
 }
 
@@ -395,10 +402,14 @@ export async function renameDocument(id: string, name: string): Promise<void> {
   await txDone(tx)
 }
 
+function tombstone(tx: IDBTransaction, docId: string) {
+  tx.objectStore(TOMBSTONES_STORE).put({ docId, deletedAt: Date.now() })
+}
+
 /** Delete documents and all of their pages. */
 export async function deleteDocuments(ids: string[]): Promise<void> {
   const db = await openDb()
-  const tx = db.transaction([PAGES_STORE, DOCS_STORE], "readwrite")
+  const tx = db.transaction([PAGES_STORE, DOCS_STORE, TOMBSTONES_STORE], "readwrite")
   const pages = tx.objectStore(PAGES_STORE)
   const docs = tx.objectStore(DOCS_STORE)
   for (const id of ids) {
@@ -407,6 +418,7 @@ export async function deleteDocuments(ids: string[]): Promise<void> {
     )
     for (const key of keys) pages.delete(key)
     docs.delete(id)
+    tombstone(tx, id)
   }
   await txDone(tx)
 }
@@ -419,7 +431,7 @@ export async function mergeDocuments(ids: string[]): Promise<string> {
   if (ids.length < 2) throw new Error("Select at least two documents to merge")
   const [targetId, ...rest] = ids
   const db = await openDb()
-  const tx = db.transaction([PAGES_STORE, DOCS_STORE], "readwrite")
+  const tx = db.transaction([PAGES_STORE, DOCS_STORE, TOMBSTONES_STORE], "readwrite")
   const pages = tx.objectStore(PAGES_STORE)
   const docs = tx.objectStore(DOCS_STORE)
   const target = await requestToPromise(docs.get(targetId) as IDBRequest<StoredDocument | undefined>)
@@ -431,6 +443,7 @@ export async function mergeDocuments(ids: string[]): Promise<string> {
   for (const id of rest) {
     await movePages(pages, docSession(id), docSession(targetId))
     docs.delete(id)
+    tombstone(tx, id)
   }
   docs.put({ ...target, updatedAt: Date.now() })
   await txDone(tx)
@@ -440,8 +453,95 @@ export async function mergeDocuments(ids: string[]): Promise<string> {
 /** Delete every document and every in-progress scan. */
 export async function deleteAllData(): Promise<void> {
   const db = await openDb()
-  const tx = db.transaction([PAGES_STORE, DOCS_STORE], "readwrite")
+  const tx = db.transaction([PAGES_STORE, DOCS_STORE, TOMBSTONES_STORE], "readwrite")
+  const docIds = (await requestToPromise(tx.objectStore(DOCS_STORE).getAllKeys())) as string[]
   tx.objectStore(PAGES_STORE).clear()
   tx.objectStore(DOCS_STORE).clear()
+  for (const id of docIds) tombstone(tx, id)
+  await txDone(tx)
+}
+
+/* ------------------------------------------------------------------ */
+/* Backup sync support                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface Tombstone {
+  docId: string
+  deletedAt: number
+}
+
+export async function listTombstones(): Promise<Tombstone[]> {
+  const db = await openDb()
+  const tx = db.transaction(TOMBSTONES_STORE, "readonly")
+  return requestToPromise(tx.objectStore(TOMBSTONES_STORE).getAll() as IDBRequest<Tombstone[]>)
+}
+
+export async function clearTombstones(docIds: string[]): Promise<void> {
+  if (!docIds.length) return
+  const db = await openDb()
+  const tx = db.transaction(TOMBSTONES_STORE, "readwrite")
+  for (const id of docIds) tx.objectStore(TOMBSTONES_STORE).delete(id)
+  await txDone(tx)
+}
+
+/** Every document record (no page data). */
+export async function listDocumentRecords(): Promise<StoredDocument[]> {
+  const db = await openDb()
+  const tx = db.transaction(DOCS_STORE, "readonly")
+  return requestToPromise(tx.objectStore(DOCS_STORE).getAll() as IDBRequest<StoredDocument[]>)
+}
+
+export interface IncomingPage {
+  id: string
+  order: number
+  width: number
+  height: number
+  createdAt: number
+  /** Required for pages not already on this device. */
+  blob?: Blob
+  thumbnail?: Blob
+}
+
+/**
+ * Make a local document match a remote copy exactly, in one transaction:
+ * the document record (including its remote updatedAt, so this doesn't look
+ * like a local edit), page order, pages removed remotely, and new pages.
+ * A tombstone for this id is cleared (the document exists again).
+ */
+export async function applyRemoteDocument(doc: StoredDocument, pages: IncomingPage[]): Promise<void> {
+  const db = await openDb()
+  const tx = db.transaction([PAGES_STORE, DOCS_STORE, TOMBSTONES_STORE], "readwrite")
+  const store = tx.objectStore(PAGES_STORE)
+  const session = docSession(doc.id)
+
+  const existing = new Map<string, StoredPage>()
+  await walkSession(store, session, (record) => existing.set(record.id, record))
+  const wanted = new Set(pages.map((p) => p.id))
+
+  for (const id of existing.keys()) if (!wanted.has(id)) store.delete(id)
+  for (const p of pages) {
+    const local = existing.get(p.id)
+    if (local) {
+      if (local.order !== p.order) store.put({ ...local, order: p.order })
+      continue
+    }
+    if (!p.blob || !p.thumbnail) {
+      tx.abort()
+      await txDone(tx).catch(() => {})
+      throw new Error(`Page ${p.id} is missing its image data`)
+    }
+    store.put({
+      id: p.id,
+      sessionId: session,
+      order: p.order,
+      blob: p.blob,
+      thumbnail: p.thumbnail,
+      width: p.width,
+      height: p.height,
+      createdAt: p.createdAt,
+    } satisfies StoredPage)
+  }
+  tx.objectStore(DOCS_STORE).put(doc)
+  tx.objectStore(TOMBSTONES_STORE).delete(doc.id)
   await txDone(tx)
 }

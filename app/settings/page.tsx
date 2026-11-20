@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils"
 import { useSettings } from "@/lib/settings"
 import { deleteAllData, listDocuments } from "@/lib/db/indexed-db"
 import { formatBytes, pluralPages } from "@/lib/format"
+import { BackupSettings } from "@/components/backup-settings"
+import { scheduleBackup, useBackup } from "@/lib/drive/backup"
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -103,6 +105,7 @@ export default function SettingsPage() {
   const [confirmWipe, setConfirmWipe] = useState(false)
   const [wiping, setWiping] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const { link } = useBackup()
 
   const loadStorage = useCallback(async () => {
     try {
@@ -127,6 +130,7 @@ export default function SettingsPage() {
     setWiping(true)
     try {
       await deleteAllData()
+      scheduleBackup(500)
       setNotice("All documents deleted")
       await loadStorage()
     } catch (err) {
@@ -269,11 +273,17 @@ export default function SettingsPage() {
         </section>
 
         <section>
+          <SectionLabel>Backup</SectionLabel>
+          <BackupSettings />
+        </section>
+
+        <section>
           <div className="flex gap-3 rounded-2xl border border-border bg-card p-4">
             <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Doku Scan works fully offline. Your scans never leave this device unless you share or
-              export them yourself. No account, no cloud, no tracking.
+              Doku Scan works fully offline. Your scans never leave this device unless you share them or
+              turn on Google Drive backup, which goes straight to your own Drive. No account, no
+              servers, no tracking.
             </p>
           </div>
         </section>
@@ -286,7 +296,7 @@ export default function SettingsPage() {
         title="Delete all documents?"
         description={
           storage
-            ? `${storage.docs} ${storage.docs === 1 ? "document" : "documents"} (${pluralPages(storage.pages)}) will be permanently removed from this device. This can't be undone.`
+            ? `${storage.docs} ${storage.docs === 1 ? "document" : "documents"} (${pluralPages(storage.pages)}) will be permanently removed from this device.${link ? " Their Google Drive backups move to the Drive trash on the next backup." : " This can't be undone."}`
             : undefined
         }
         confirmLabel="Delete all"

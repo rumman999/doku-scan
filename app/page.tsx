@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { useDocuments } from "@/hooks/use-documents"
 import { useSettings } from "@/lib/settings"
 import { deleteDocuments, mergeDocuments } from "@/lib/db/indexed-db"
+import { scheduleBackup } from "@/lib/drive/backup"
 import { pluralPages } from "@/lib/format"
 
 export default function LibraryPage() {
@@ -41,6 +42,9 @@ export default function LibraryPage() {
       return next.size === prev.size ? prev : next
     })
   }, [documents])
+
+  // Opening the app catches up on anything not yet backed up (or restored elsewhere).
+  useEffect(() => scheduleBackup(1500), [])
 
   useEffect(() => {
     if (!notice) return
@@ -91,6 +95,7 @@ export default function LibraryPage() {
       }
       exitSelection()
       await refresh()
+      scheduleBackup()
     } catch (err) {
       console.error(`[Library] ${confirm} failed`, err)
       setNotice(confirm === "merge" ? "Couldn't merge these documents" : "Couldn't delete these documents")

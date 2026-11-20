@@ -35,6 +35,33 @@ npx cap run android      # or: npx cap open android
 
 Debug the app's WebView from desktop Chrome at `chrome://inspect`.
 
+## Google Drive backup (optional)
+
+Backups go straight from the phone to the user's own Google Drive (no server). The app uses the
+`drive.file` scope, so it can only see files it created. It's a non-sensitive scope, so no Google app
+review is needed. One-time setup in [Google Cloud Console](https://console.cloud.google.com/):
+
+1. Create (or pick) a project. **APIs & Services → Library**: enable **Google Drive API**.
+2. **Google Auth Platform → Branding/Audience**: configure the consent screen (External). While it's in
+   *Testing*, add your Google account under **Test users**.
+3. **Data Access**: add the scope `https://www.googleapis.com/auth/drive.file`.
+4. **Clients → Create client**:
+   - **Android**: package `com.rumman.scanner`, SHA-1 of the signing key.
+     Debug key: `cd android && ./gradlew :app:signingReport` (Variant: debug → SHA1). Add another Android
+     client for your release / Play signing key before publishing.
+   - **Web application**: used as the server client id. For browser testing, add
+     `http://localhost:3000` to *Authorized JavaScript origins*.
+5. Put the **Web** client id in `.env.local` (see `.env.example`):
+   `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID=1234-abc.apps.googleusercontent.com`
+6. `pnpm build && npx cap sync android`, then run the app: **Settings → Backup → Connect Google Drive**.
+
+New Google Cloud clients can take a few minutes (occasionally hours) to start working. Error `[28444]`
+on Android means the package name / SHA-1 / client type don't match.
+
+Drive layout: `<your folder>/<document>/page-*.jpg` + `doc.json`. Deleting a document in the app moves its
+Drive copy to the Drive trash (recoverable for 30 days). After reinstalling, connect and choose the
+existing folder to restore.
+
 ## Architecture
 - `app/` — screens: library (`/`), document (`/doc?id=`), scanner (`/scan`), settings.
 - `lib/cv/` — detection, dewarp and filters (OpenCV.js). `lib/cv/worker.ts` is bundled to `public/cv-worker.js` by `scripts/build-worker.mjs`; `public/opencv.js` is vendored OpenCV 4.8.0.
