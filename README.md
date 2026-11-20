@@ -10,7 +10,7 @@ No account, no ads, no tracking.
 [Website](https://rumman.is-a.dev/doku-scan/) ·
 [Privacy Policy](https://rumman.is-a.dev/doku-scan/privacy.html)
 
-![Downloads](https://img.shields.io/github/downloads/rumman999/doku-scan/total)
+![Downloads](https://img.shields.io/github/downloads/rumman999/doku-scan/total?color=blue)
 
 </div>
 
