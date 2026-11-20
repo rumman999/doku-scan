@@ -1,0 +1,40 @@
+:root {
+  --bg: #ffffff;
+  --fg: #0f172a;
+  --muted: #5b6474;
+  --line: #e5e7eb;
+  --card: #f6f7f9;
+  --accent: #2563eb;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0f17; --fg: #e8ebf1; --muted: #9aa3b2; --line: #232a36; --card: #121824; --accent: #5b8def; }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--accent); }
+.bar, main, .foot { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+.bar { display: flex; align-items: center; height: 64px; }
+.brand { display: inline-flex; gap: 10px; align-items: center; font-weight: 700; color: var(--fg); text-decoration: none; }
+.hero { text-align: center; padding: 48px 0 32px; }
+.hero h1 { font-size: clamp(32px, 7vw, 48px); line-height: 1.1; margin: 20px 0 12px; letter-spacing: -0.02em; }
+.lead { color: var(--muted); font-size: 18px; max-width: 34em; margin: 0 auto; }
+.cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn { display: inline-block; padding: 12px 22px; border-radius: 12px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+.btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; padding: 16px 0 8px; }
+.grid div { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+.grid h2 { font-size: 17px; margin: 0 0 6px; }
+.grid p { margin: 0; color: var(--muted); }
+.doc { padding: 24px 0 8px; }
+.doc h1 { font-size: 34px; margin: 24px 0 4px; }
+.doc h2 { font-size: 20px; margin: 32px 0 8px; }
+.doc li { margin: 6px 0; }
+.muted { color: var(--muted); }
+code { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: 0.9em; word-break: break-all; }
+.foot { border-top: 1px solid var(--line); margin-top: 48px; padding-top: 20px; padding-bottom: 32px; color: var(--muted); font-size: 14px; }
