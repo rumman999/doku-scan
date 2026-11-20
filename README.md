@@ -1,10 +1,19 @@
 <div align="center">
-  <img src="public/icon.svg" alt="Doku Scan Logo" width="160" height="160" />
-</div>
+  <img src="public/icon.svg" alt="Doku Scan logo" width="160" height="160" />
 
 # Doku Scan
 
-A free, fully offline document scanner. Built with Next.js (static export) and packaged for Android/iOS with Capacitor. No account, no cloud, no tracking: scans stay on the device unless you share them.
+A free, open-source document scanner for Android that works fully offline.<br>
+No account, no ads, no tracking.
+
+[**Download the APK**](https://github.com/rumman999/doku-scan/releases/latest) ·
+[Website](https://rumman.is-a.dev/doku-scan/) ·
+[Privacy Policy](https://rumman.is-a.dev/doku-scan/privacy.html)
+
+</div>
+
+Scans stay on your phone. Nothing leaves the device unless you share a PDF or turn on the optional
+Google Drive backup.
 
 ## Features
 - **Live edge detection**: OpenCV (WebAssembly, in a Web Worker) finds the page in the camera preview; optional auto-capture when the page holds still.
@@ -13,6 +22,15 @@ A free, fully offline document scanner. Built with Next.js (static export) and p
 - **Single and batch modes**: batch keeps shooting while pages process in the background.
 - **Document library**: scans are saved on the device (IndexedDB). Rename, reorder, remove or add pages, view full screen, merge documents, delete.
 - **PDF export**: A4 / Letter / Auto page size, quality presets, optional watermark and password; shared via the native share sheet.
+- **Optional Google Drive backup**: back up to a folder in your own Drive and restore everything after reinstalling. The app can only see files it created.
+
+## Install
+
+1. Download `DokuScan-v*.apk` from the [latest release](https://github.com/rumman999/doku-scan/releases/latest) on your Android phone.
+2. Open it and allow installs from this source when asked.
+3. Install and open Doku Scan.
+
+Requires Android 7.0 or newer.
 
 ## Development
 
@@ -94,3 +112,12 @@ a key whose SHA-1 is registered as an Android client in the Google Cloud project
 - `lib/settings.ts` — user defaults (localStorage).
 
 Note: PDF passwords use jsPDF's built-in RC4 encryption. It keeps casual readers out but is not strong encryption.
+
+## Contributing
+
+Bug reports and pull requests are welcome. Please run `pnpm typecheck` and `pnpm build` before opening a
+pull request. For anything big, open an issue first so we can agree on the approach.
+
+## License
+
+[MIT](LICENSE)

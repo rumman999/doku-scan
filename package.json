@@ -1,6 +1,7 @@
 {
   "name": "doku-scan",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "build:worker": "node scripts/build-worker.mjs",
