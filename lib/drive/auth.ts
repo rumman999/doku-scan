@@ -6,11 +6,16 @@ import { Capacitor } from "@capacitor/core"
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 /**
- * OAuth "Web application" client id from Google Cloud Console, baked in at
- * build time. The Android client (package + SHA-1) must exist in the same
- * project but its id is NOT used here. See README "Google Drive backup".
+ * Doku Scan's official OAuth "Web application" client id. Client ids are public
+ * by design (they identify the app, they don't grant access), so it is safe to
+ * ship in an open-source repo. Sign-in on Android also requires the APK's
+ * package name + signing-key SHA-1 to be registered in the same Google Cloud
+ * project, so builds signed with other keys must set their own id via
+ * NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID (see README "Google Drive backup").
  */
-export const GOOGLE_WEB_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? ""
+const OFFICIAL_WEB_CLIENT_ID = "202859120127-ij02guo65r83eni6rv4a4cf8tulqfmnt.apps.googleusercontent.com"
+
+export const GOOGLE_WEB_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || OFFICIAL_WEB_CLIENT_ID
 
 export function isDriveConfigured(): boolean {
   return GOOGLE_WEB_CLIENT_ID.length > 0

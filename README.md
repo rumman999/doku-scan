@@ -35,23 +35,31 @@ npx cap run android      # or: npx cap open android
 
 Debug the app's WebView from desktop Chrome at `chrome://inspect`.
 
-## Google Drive backup (optional)
+## Google Drive backup
 
 Backups go straight from the phone to the user's own Google Drive (no server). The app uses the
 `drive.file` scope, so it can only see files it created. It's a non-sensitive scope, so no Google app
-review is needed. One-time setup in [Google Cloud Console](https://console.cloud.google.com/):
+review is needed.
+
+**Users don't set anything up**: official releases include Doku Scan's Google client id
+(`lib/drive/auth.ts`), so they just tap *Settings → Backup → Connect Google Drive*.
+
+**Building it yourself?** Google only accepts sign-ins from APKs signed with a key registered to the
+project, so a build signed with your own key (including a debug build) needs its own Google Cloud
+project. Everything except Drive backup works without it. Setup in
+[Google Cloud Console](https://console.cloud.google.com/):
 
 1. Create (or pick) a project. **APIs & Services → Library**: enable **Google Drive API**.
 2. **Google Auth Platform → Branding/Audience**: configure the consent screen (External). While it's in
    *Testing*, add your Google account under **Test users**.
 3. **Data Access**: add the scope `https://www.googleapis.com/auth/drive.file`.
 4. **Clients → Create client**:
-   - **Android**: package `com.rumman.scanner`, SHA-1 of the signing key.
+   - **Android**: package `com.spycakes.dokuscan`, SHA-1 of the signing key.
      Debug key: `cd android && ./gradlew :app:signingReport` (Variant: debug → SHA1). Add another Android
      client for your release / Play signing key before publishing.
    - **Web application**: used as the server client id. For browser testing, add
      `http://localhost:3000` to *Authorized JavaScript origins*.
-5. Put the **Web** client id in `.env.local` (see `.env.example`):
+5. Put your **Web** client id in `.env.local` (see `.env.example`); it overrides the official one:
    `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID=1234-abc.apps.googleusercontent.com`
 6. `pnpm build && npx cap sync android`, then run the app: **Settings → Backup → Connect Google Drive**.
 

@@ -1,4 +1,4 @@
-package com.rumman.scanner;
+package com.spycakes.dokuscan;
 
 import android.content.Intent;
 import android.util.Log;

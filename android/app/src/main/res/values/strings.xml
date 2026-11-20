@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Doku Scan</string>
     <string name="title_activity_main">Doku Scan</string>
-    <string name="package_name">com.rumman.scanner</string>
-    <string name="custom_url_scheme">com.rumman.scanner</string>
+    <string name="package_name">com.spycakes.dokuscan</string>
+    <string name="custom_url_scheme">com.spycakes.dokuscan</string>
 </resources>
