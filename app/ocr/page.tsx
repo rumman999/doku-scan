@@ -39,8 +39,11 @@ export default function Page() {
     const a = document.createElement("a")
     a.href = url
     a.download = "extracted-text.txt"
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(url)
+    a.remove()
+    // Revoking synchronously can cancel the download in Safari/WebViews.
+    setTimeout(() => URL.revokeObjectURL(url), 30_000)
   }
 
   const charCount = text.length

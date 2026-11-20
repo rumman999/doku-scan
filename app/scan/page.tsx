@@ -20,16 +20,37 @@ type Screen = "camera" | "crop" | "saving"
 const MAGIC_COLOR_OPTIONS = { unsharpStrength: 0.6, saturationBoost: 1.25 }
 const BW_OPTIONS = { method: "adaptive-gaussian" as const, blockSize: 21, cConstant: 10 }
 const RAW_FRAME_JPEG_QUALITY = 0.95
+/** Consecutive steady detections needed before auto-capture fires (~1.5s at 500ms polling). */
+const AUTO_CAPTURE_STEADY_FRAMES = 3
+/** Max corner drift between polls, as a fraction of the frame's long side, to count as "steady". */
+const STEADY_TOLERANCE = 0.02
 
-/** Apply the selected enhancement filter to an already-cropped page. */
-async function applyFilter(source: Blob, filter: FilterMode): Promise<ImageBitmap> {
+/**
+ * Apply the selected enhancement filter to an already-cropped page.
+ * Takes ownership of `page`: it is either returned or closed.
+ */
+async function applyFilter(page: ImageBitmap, filter: FilterMode): Promise<ImageBitmap> {
+  if (filter === "none") return page
   try {
-    if (filter === "magic-color") return await documentProcessor.magicColor(source, MAGIC_COLOR_OPTIONS)
-    if (filter === "bw") return await documentProcessor.applyBw(source, BW_OPTIONS)
+    // The worker call transfers (detaches) its input, so send a copy and keep
+    // the original as a fallback if filtering fails.
+    const copy = await createImageBitmap(page)
+    const filtered =
+      filter === "magic-color"
+        ? await documentProcessor.magicColor(copy, MAGIC_COLOR_OPTIONS)
+        : await documentProcessor.applyBw(copy, BW_OPTIONS)
+    page.close()
+    return filtered
   } catch (err) {
     console.warn("[Filter] failed, keeping unfiltered page", err)
+    return page
   }
-  return createImageBitmap(source)
+}
+
+/** True when every corner moved less than `tolerance` pixels since the previous detection. */
+function cornersSteady(prev: Point[] | null, next: Point[], tolerance: number): boolean {
+  if (!prev || prev.length !== 4) return false
+  return next.every((p, i) => Math.hypot(p.x - prev[i].x, p.y - prev[i].y) <= tolerance)
 }
 
 export default function ScanPage() {
@@ -46,6 +67,10 @@ export default function ScanPage() {
   const streamRef = useRef<MediaStream | null>(null)
   const [cameraActive, setCameraActive] = useState<boolean>(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const mountedRef = useRef<boolean>(true)
+  /** Bumped on every (re)start/stop so a slow getUserMedia from an older attempt is discarded. */
+  const cameraAttemptRef = useRef<number>(0)
   const [torchEnabled, setTorchEnabled] = useState<boolean>(false)
   const [hasTorch, setHasTorch] = useState<boolean>(false)
 
@@ -88,17 +113,36 @@ export default function ScanPage() {
   /**
    * Request native permission (Capacitor), then open the rear camera stream.
    */
+  const stopCamera = useCallback(() => {
+    cameraAttemptRef.current++
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
+    setCameraActive(false)
+    setTorchEnabled(false)
+  }, [])
+
   const startCamera = useCallback(async () => {
+    const attempt = ++cameraAttemptRef.current
+    const stale = () => !mountedRef.current || attempt !== cameraAttemptRef.current
     try {
       setCameraError(null)
       streamRef.current?.getTracks().forEach((track) => track.stop())
       streamRef.current = null
+      setTorchEnabled(false)
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError("This device or browser doesn't support camera access.")
+        setCameraActive(false)
+        return
+      }
 
       // Inside the Android/iOS app the WebView can only open the camera once
       // the OS-level permission is granted. (The plugin's web implementation
       // throws "Not implemented", and browsers prompt via getUserMedia anyway.)
       if (Capacitor.isNativePlatform()) {
         const { camera } = await CameraPlugin.requestPermissions({ permissions: ["camera"] })
+        if (stale()) return
         if (camera !== "granted") {
           setCameraError(
             "Camera permission denied. Enable camera access for DokuScan in your device's app settings.",
@@ -116,6 +160,12 @@ export default function ScanPage() {
           height: { ideal: 2160 },
         },
       })
+      // Unmounted or restarted while the permission prompt / camera startup was pending:
+      // release this stream, otherwise the camera (and its indicator light) stays on.
+      if (stale()) {
+        mediaStream.getTracks().forEach((t) => t.stop())
+        return
+      }
       streamRef.current = mediaStream
 
       const videoTrack = mediaStream.getVideoTracks()[0]
@@ -133,14 +183,22 @@ export default function ScanPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream
         await videoRef.current.play()
+        if (stale()) return
         setCameraActive(true)
       }
     } catch (err: any) {
+      if (stale()) return
+      // play() rejects with AbortError when a newer start replaces the source; not a failure.
+      if (err?.name === "AbortError") return
       console.error("[Camera Access Error]", err)
       setCameraError(
-        err?.name === "NotAllowedError"
+        err?.name === "NotAllowedError" || err?.name === "SecurityError"
           ? "Camera permission denied. Please allow camera access in your browser settings."
-          : "Unable to start camera. Please ensure camera hardware is connected.",
+          : err?.name === "NotReadableError"
+            ? "The camera is being used by another app. Close it and try again."
+            : err?.name === "NotFoundError" || err?.name === "OverconstrainedError"
+              ? "No usable camera was found on this device."
+              : "Unable to start camera. Please ensure camera hardware is connected.",
       )
       setCameraActive(false)
     }
@@ -161,13 +219,32 @@ export default function ScanPage() {
 
   // Lifecycle: start camera + worker on mount, always release the camera on unmount
   useEffect(() => {
+    mountedRef.current = true
     startCamera()
     documentProcessor.init().catch(console.error)
     return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
+      mountedRef.current = false
+      stopCamera()
     }
-  }, [startCamera])
+  }, [startCamera, stopCamera])
+
+  // Release the camera while the app is in the background (saves battery, lets
+  // other apps use it, and avoids a frozen preview on resume), then reopen it.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") stopCamera()
+      else if (!streamRef.current) startCamera()
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => document.removeEventListener("visibilitychange", onVisibility)
+  }, [startCamera, stopCamera])
+
+  // Auto-dismiss transient notices.
+  useEffect(() => {
+    if (!notice) return
+    const t = setTimeout(() => setNotice(null), 4000)
+    return () => clearTimeout(t)
+  }, [notice])
 
   /**
    * Grab the current video frame at full resolution and JPEG-encode it.
@@ -212,38 +289,65 @@ export default function ScanPage() {
   /** Batch: enqueue dewarp + filter + IndexedDB write; never blocks the shutter. */
   const enqueueBatchPage = (raw: Blob, corners: Point[] | null, filter: FilterMode) => {
     setPendingCount((n) => n + 1)
+    // Every step is caught: a rejected link would silently skip all later pages
+    // in the chain and leave "Next" waiting on a failed promise.
     queueRef.current = queueRef.current.then(async () => {
-      let bitmap: ImageBitmap
+      let bitmap: ImageBitmap | null = null
       try {
-        const result = await documentProcessor.processFull(
-          raw,
-          corners ?? undefined,
-          filter,
-          MAGIC_COLOR_OPTIONS,
-          BW_OPTIONS,
-        )
-        bitmap = result.bitmap
-      } catch (err) {
-        // Keep the page rather than lose it; it can still be exported as-is.
-        console.warn("[Batch] processing failed, saving raw frame", err)
-        bitmap = await createImageBitmap(raw)
-      }
-      try {
+        try {
+          // Detect on the full-resolution capture; the live-preview corners are
+          // only a fallback because they can lag the shutter by up to ~500ms.
+          const result = await documentProcessor.processFull(
+            raw,
+            undefined,
+            filter,
+            MAGIC_COLOR_OPTIONS,
+            BW_OPTIONS,
+            corners ?? undefined,
+          )
+          bitmap = result.bitmap
+        } catch (err) {
+          // Keep the page rather than lose it; it can still be exported as-is.
+          console.warn("[Batch] processing failed, saving raw frame", err)
+          bitmap = await createImageBitmap(raw)
+        }
         await batch.addFromBitmap(bitmap)
       } catch (err) {
         console.error("[Batch] failed to save page", err)
+        if (mountedRef.current) setNotice("A page couldn't be saved. Please capture it again.")
       } finally {
-        bitmap.close()
-        setPendingCount((n) => n - 1)
+        bitmap?.close()
+        if (mountedRef.current) setPendingCount((n) => n - 1)
       }
     })
   }
 
+  const cropSrcRef = useRef<string | null>(null)
+  cropSrcRef.current = cropSrc
+
+  // Release the captured photo's object URL if the page unmounts mid-crop.
+  useEffect(
+    () => () => {
+      if (cropSrcRef.current) URL.revokeObjectURL(cropSrcRef.current)
+    },
+    [],
+  )
+
   /** Single: hand the frame to the crop screen. */
   const openCrop = (raw: Blob, corners: Point[] | null) => {
-    setCropSrc(URL.createObjectURL(raw))
+    const url = URL.createObjectURL(raw)
+    cropSrcRef.current = url
+    setCropSrc(url)
     setCropCorners(corners)
     setScreen("crop")
+    // Refine on the captured photo itself; the preview corners may be stale.
+    documentProcessor
+      .detectCorners(raw)
+      .then((detected) => {
+        if (!detected || detected.length !== 4 || cropSrcRef.current !== url) return
+        setCropCorners(detected)
+      })
+      .catch((err) => console.warn("[Crop] detection on captured frame failed", err))
   }
 
   const handleShutter = async () => {
@@ -268,28 +372,29 @@ export default function ScanPage() {
 
   const closeCrop = () => {
     if (cropSrc) URL.revokeObjectURL(cropSrc)
+    cropSrcRef.current = null
     setCropSrc(null)
     setCropCorners(null)
     setScreen("camera")
   }
 
-  /** Single-mode crop confirmed: filter, persist, and go to export. */
-  const handleCropComplete = async (dataUrl: string) => {
+  /** Single-mode crop confirmed: filter, persist, and go to export. Takes ownership of `page`. */
+  const handleCropComplete = async (page: ImageBitmap) => {
     setScreen("saving")
+    let bitmap: ImageBitmap | null = page
     try {
-      const cropped = await (await fetch(dataUrl)).blob()
-      const bitmap = await applyFilter(cropped, settingsRef.current.filterMode)
-      try {
-        await single.clear()
-        await single.addFromBitmap(bitmap)
-      } finally {
-        bitmap.close()
-      }
+      bitmap = await applyFilter(page, settingsRef.current.filterMode)
+      await single.clear()
+      await single.addFromBitmap(bitmap)
       closeCrop()
       setExportTarget("single")
     } catch (err) {
       console.error("[Single Save Error]", err)
-      closeCrop()
+      // Stay on the crop screen so the user can retry instead of losing the shot.
+      setScreen("crop")
+      setNotice("Couldn't save this page. Check free storage and try again.")
+    } finally {
+      bitmap?.close()
     }
   }
 
@@ -297,7 +402,7 @@ export default function ScanPage() {
   const handleBatchFinish = async () => {
     setFinishing(true)
     try {
-      await queueRef.current
+      await queueRef.current.catch(() => {})
       setExportTarget("batch")
     } finally {
       setFinishing(false)
@@ -309,7 +414,13 @@ export default function ScanPage() {
    * Samples a scaled low-resolution frame (max 640px) to feed the Web Worker.
    */
   useEffect(() => {
-    if (!cameraActive || detectionPaused) return
+    if (!cameraActive || detectionPaused) {
+      // Don't leave a stale outline (or a primed auto-capture) behind.
+      setDetectedCorners(null)
+      lastCornersRef.current = null
+      steadyCountRef.current = 0
+      return
+    }
 
     let busy = false
     let stopped = false
@@ -338,11 +449,20 @@ export default function ScanPage() {
         if (corners && corners.length === 4) {
           // Rescale corners back to video stream native coordinate space
           const fullCorners: Point[] = corners.map((p) => ({ x: p.x / scale, y: p.y / scale }))
+          const tolerance = Math.max(video.videoWidth, video.videoHeight) * STEADY_TOLERANCE
+          // Only count frames where the page hasn't moved; otherwise auto-capture
+          // fires mid-motion and produces blurry, mis-cropped pages.
+          steadyCountRef.current = cornersSteady(lastCornersRef.current, fullCorners, tolerance)
+            ? steadyCountRef.current + 1
+            : 1
           setDetectedCorners(fullCorners)
           lastCornersRef.current = fullCorners
 
-          steadyCountRef.current += 1
-          if (settingsRef.current.autoCapture && autoArmedRef.current && steadyCountRef.current >= 3) {
+          if (
+            settingsRef.current.autoCapture &&
+            autoArmedRef.current &&
+            steadyCountRef.current >= AUTO_CAPTURE_STEADY_FRAMES
+          ) {
             autoArmedRef.current = false
             handleShutterRef.current()
           }
@@ -368,6 +488,13 @@ export default function ScanPage() {
   /**
    * Draw the dynamic real-time polygon overlay matched to the viewport video display.
    */
+  const [viewport, setViewport] = useState(0)
+  useEffect(() => {
+    const onResize = () => setViewport((n) => n + 1)
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
+
   useEffect(() => {
     const canvas = overlayCanvasRef.current
     const video = videoRef.current
@@ -375,19 +502,22 @@ export default function ScanPage() {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Back the canvas at device resolution so the outline is crisp on phones.
     const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.round(rect.width * dpr)
+    canvas.height = Math.round(rect.height * dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, rect.width, rect.height)
 
     if (!detectedCorners || detectedCorners.length !== 4 || detectionPaused) return
 
-    // object-fit: cover mapping from video pixels to viewport pixels
+    // object-fit: cover mapping from video pixels to viewport (CSS) pixels
     const videoW = video.videoWidth || 1920
     const videoH = video.videoHeight || 1080
-    const scale = Math.max(canvas.width / videoW, canvas.height / videoH)
-    const offsetX = (canvas.width - videoW * scale) / 2
-    const offsetY = (canvas.height - videoH * scale) / 2
+    const scale = Math.max(rect.width / videoW, rect.height / videoH)
+    const offsetX = (rect.width - videoW * scale) / 2
+    const offsetY = (rect.height - videoH * scale) / 2
     const viewPoints = detectedCorners.map((p) => ({ x: p.x * scale + offsetX, y: p.y * scale + offsetY }))
 
     ctx.save()
@@ -415,7 +545,7 @@ export default function ScanPage() {
       ctx.stroke()
     })
     ctx.restore()
-  }, [detectedCorners, detectionPaused])
+  }, [detectedCorners, detectionPaused, viewport])
 
   const batchCount = batch.pages.length + pendingCount
   const batchPreview = batch.pages.at(-1)?.thumbUrl ?? null
@@ -647,12 +777,28 @@ export default function ScanPage() {
         </div>
       ) : null}
 
+      {notice ? (
+        <div
+          role="alert"
+          className="pointer-events-none absolute inset-x-4 top-36 z-[60] mx-auto max-w-sm rounded-xl bg-rose-600/90 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg"
+        >
+          {notice}
+        </div>
+      ) : null}
+
       <PdfExportSheet
         open={exportTarget !== null}
         onClose={() => setExportTarget(null)}
         pages={exportBatch.pages}
         onReorder={exportBatch.reorder}
         onRemove={exportBatch.remove}
+        onExported={(result) => {
+          // A delivered batch is finished: start the next scan with an empty
+          // tray instead of silently mixing old pages into the next document.
+          if (result !== "cancelled" && exportTarget === "batch") {
+            batch.clear().catch((err) => console.error("[Batch] clear after export failed", err))
+          }
+        }}
       />
     </main>
   )

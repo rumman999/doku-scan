@@ -285,7 +285,12 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         try {
           let corners = data.corners;
           if (!corners || corners.length !== 4) {
+            // Detect on the frame actually captured; live-preview corners can be
+            // a few hundred ms stale and the camera may have moved since.
             corners = detectDocumentCorners(cvInstance, srcMat) ?? undefined;
+          }
+          if ((!corners || corners.length !== 4) && data.hintCorners?.length === 4) {
+            corners = data.hintCorners;
           }
 
           if (corners && corners.length === 4) {

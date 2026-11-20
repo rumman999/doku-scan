@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import React, { useRef, useState, useEffect, useCallback } from "react"
 import { Check, RotateCcw, Sparkles } from "lucide-react"
@@ -9,7 +9,8 @@ import { documentProcessor } from "@/lib/cv/processor-client"
 interface CropViewProps {
   src: string
   initialCorners?: Point[] | null
-  onCropComplete: (base64: string) => void
+  /** Receives the dewarped page. Ownership passes to the caller, which must close() it. */
+  onCropComplete: (page: ImageBitmap) => void | Promise<void>
   onCancel?: () => void
 }
 
@@ -59,8 +60,11 @@ export function CropView({
 
   // Active dragging state
   const activeDragIndexRef = useRef<number | null>(null)
+  /** Set once the user moves a handle; auto-updates must not overwrite their work. */
+  const userEditedRef = useRef<boolean>(false)
   const isWarpingRef = useRef<boolean>(false)
   const [isProcessing, setIsProcessing] = useState<boolean>(false)
+  const [error, setError] = useState<string | null>(null)
 
   /**
    * Recalculates display bounds and maps natural image coordinates to SVG screen coordinates.
@@ -75,7 +79,8 @@ export function CropView({
     const nh = img.naturalHeight
 
     // Compute contained image layout dimensions
-    const scale = Math.min(containerRect.width / nw, containerRect.height / nh)
+    // The <img> uses max-w/max-h-full, so it shrinks to fit but never upscales.
+    const scale = Math.min(1, containerRect.width / nw, containerRect.height / nh)
     const dw = nw * scale
     const dh = nh * scale
     const ox = (containerRect.width - dw) / 2
@@ -231,6 +236,8 @@ export function CropView({
     e.stopPropagation()
     e.preventDefault()
     activeDragIndexRef.current = index
+    userEditedRef.current = true
+    setError(null)
     ;(e.target as Element).setPointerCapture(e.pointerId)
   }
 
@@ -284,14 +291,18 @@ export function CropView({
 
     try {
       setIsProcessing(true)
+      setError(null)
       const bitmap = await createImageBitmap(img)
       const detected = await documentProcessor.detectCorners(bitmap)
       if (detected && detected.length === 4) {
         cornersRef.current = detected
         renderSvgElements()
+      } else {
+        setError("No document edges found. Drag the corners into place.")
       }
     } catch (err) {
       console.error("[Auto-Detect Error]", err)
+      setError("Auto-detect failed. Drag the corners into place.")
     } finally {
       setIsProcessing(false)
     }
@@ -305,37 +316,50 @@ export function CropView({
     try {
       isWarpingRef.current = true
       setIsProcessing(true)
+      setError(null)
 
       const bitmap = await createImageBitmap(img)
-      const corners = cornersRef.current
+      // Copy: the worker call is async and the user could touch a handle meanwhile.
+      const corners = cornersRef.current.map((p) => ({ ...p }))
 
-      // Offload to Web Worker with finalized corner coordinates
+      // Offload to Web Worker with finalized corner coordinates. The bitmap is
+      // handed straight to the parent (no JPEG round-trip, so no extra
+      // compression loss before filtering).
       const dewarpedBitmap = await documentProcessor.dewarp(bitmap, corners)
-
-      // Convert result to JPEG Base64
-      const canvas = document.createElement("canvas")
-      canvas.width = dewarpedBitmap.width
-      canvas.height = dewarpedBitmap.height
-      const ctx = canvas.getContext("2d")
-      if (!ctx) throw new Error("Could not create canvas context")
-
-      ctx.drawImage(dewarpedBitmap, 0, 0)
-      const base64 = canvas.toDataURL("image/jpeg", 0.94)
-
-      dewarpedBitmap.close()
-      onCropComplete(base64)
+      await onCropComplete(dewarpedBitmap)
     } catch (err) {
       console.error("[Warp Error]", err)
+      setError("Couldn't crop this page. Adjust the corners and try again.")
     } finally {
       setIsProcessing(false)
       isWarpingRef.current = false
     }
   }
 
-  // Window resize observer
+  // A new photo resets the "user moved a handle" flag.
   useEffect(() => {
+    userEditedRef.current = false
+    setError(null)
+  }, [src])
+
+  // Corners can arrive after the image has loaded (detection on the captured
+  // photo runs in the background). Apply them unless the user already edited.
+  useEffect(() => {
+    if (!userEditedRef.current) initCorners()
+  }, [initCorners])
+
+  // Keep the overlay aligned when the viewport or container changes size
+  // (rotation, browser chrome collapsing, split screen).
+  useEffect(() => {
+    const container = containerRef.current
     window.addEventListener("resize", updateLayoutMetrics)
-    return () => window.removeEventListener("resize", updateLayoutMetrics)
+    const observer =
+      typeof ResizeObserver !== "undefined" && container ? new ResizeObserver(() => updateLayoutMetrics()) : null
+    if (container) observer?.observe(container)
+    return () => {
+      window.removeEventListener("resize", updateLayoutMetrics)
+      observer?.disconnect()
+    }
   }, [updateLayoutMetrics])
 
   return (
@@ -403,6 +427,15 @@ export function CropView({
           </div>
         </div>
       </div>
+
+      {error ? (
+        <p
+          role="alert"
+          className="absolute inset-x-4 bottom-24 z-40 mx-auto max-w-sm rounded-xl bg-rose-600/90 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg"
+        >
+          {error}
+        </p>
+      ) : null}
 
       {/* Bottom Floating Control Bar */}
       <footer className="relative z-30 flex items-center justify-between p-4 bg-gradient-to-t from-black via-black/90 to-transparent">

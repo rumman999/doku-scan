@@ -1,4 +1,4 @@
-﻿import { Point, ProcessedBufferResult } from './document-processor';
+import { Point, ProcessedBufferResult } from './document-processor';
 import { MagicColorOptions, BwFilterOptions } from './filters';
 
 export type WorkerTaskType =
@@ -60,6 +60,8 @@ export interface ProcessFullPayload extends BaseTaskPayload {
   type: 'PROCESS_FULL';
   bitmap: ImageBitmap;
   corners?: Point[];
+  /** Fallback corners (e.g. from the live preview) used when detection on this frame fails. */
+  hintCorners?: Point[];
   filter?: 'magic-color' | 'bw' | 'none';
   magicColorOptions?: MagicColorOptions;
   bwOptions?: BwFilterOptions;

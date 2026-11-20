@@ -72,7 +72,12 @@ export function useScanBatch(sessionId: string = DEFAULT_SESSION) {
     listPages(sessionId)
       .then((metas) => {
         if (cancelled) return
-        setPages(metas.map(toBatchPage))
+        // Merge rather than replace: a page added while the restore was in
+        // flight must not be dropped from the list.
+        setPages((prev) => {
+          const seen = new Set(prev.map((p) => p.id))
+          return [...metas.filter((m) => !seen.has(m.id)).map(toBatchPage), ...prev]
+        })
       })
       .catch((err) => {
         console.error("[ScanBatch] restore failed", err)
@@ -112,10 +117,17 @@ export function useScanBatch(sessionId: string = DEFAULT_SESSION) {
 
   const remove = useCallback(
     async (id: string) => {
-      const target = pagesRef.current.find((p) => p.id === id)
+      const previous = pagesRef.current
+      const target = previous.find((p) => p.id === id)
       setPages((prev) => prev.filter((p) => p.id !== id))
-      if (target) URL.revokeObjectURL(target.thumbUrl)
-      await deletePage(id, sessionId)
+      try {
+        await deletePage(id, sessionId)
+        if (target) URL.revokeObjectURL(target.thumbUrl)
+      } catch (err) {
+        // Put the page back so the UI keeps matching what's on disk.
+        console.error("[ScanBatch] delete failed", err)
+        setPages(previous)
+      }
     },
     [sessionId],
   )

@@ -281,7 +281,14 @@ export function PdfExportSheet({
               <p className="px-1 pb-2 text-[11px] text-muted-foreground">Hold &amp; drag to reorder</p>
             ) : null}
           </div>
-          <div className="mb-5 rounded-2xl border border-border bg-card p-3">
+          <div
+            aria-busy={exporting}
+            className={cn(
+              "mb-5 rounded-2xl border border-border bg-card p-3",
+              // Removing/reordering mid-export would make buildPdf read a page that no longer exists.
+              exporting && "pointer-events-none opacity-60",
+            )}
+          >
             {pages.length > 0 ? (
               <SortablePageGrid pages={pages} onReorder={onReorder} onRemove={onRemove} />
             ) : (

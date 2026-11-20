@@ -58,6 +58,9 @@ export class DocumentProcessorClient {
 
         this.worker.onerror = (e: ErrorEvent) => {
           console.error('[DocumentProcessorWorker Error]', e);
+          // An uncaught worker error (e.g. the script failed to load) means no
+          // replies are coming: fail everything now instead of waiting for timeouts.
+          this.failAll(new Error(e.message || 'Document processor worker crashed'));
         };
 
         const taskId = this.generateTaskId();
@@ -77,9 +80,27 @@ export class DocumentProcessorClient {
       } catch (err) {
         reject(err);
       }
+    }).catch((err) => {
+      // Don't cache a failed start: tear down so the next call retries cleanly.
+      this.terminate();
+      throw err;
     });
 
     return this.initPromise;
+  }
+
+  /** Reject every in-flight task and drop the worker so the next call re-initialises. */
+  private failAll(err: Error): void {
+    const pending = Array.from(this.pendingTasks.values());
+    this.pendingTasks.clear();
+    pending.forEach(({ reject, timer }) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    this.worker?.terminate();
+    this.worker = null;
+    this.isReady = false;
+    this.initPromise = null;
   }
 
   /**
@@ -234,7 +255,8 @@ export class DocumentProcessorClient {
     corners?: Point[],
     filter: 'magic-color' | 'bw' | 'none' = 'magic-color',
     magicColorOptions?: MagicColorOptions,
-    bwOptions?: BwFilterOptions
+    bwOptions?: BwFilterOptions,
+    hintCorners?: Point[]
   ): Promise<{ bitmap: ImageBitmap; corners: Point[] | null; durationMs: number }> {
     await this.init();
     const bitmap = await this.ensureImageBitmap(source);
@@ -246,6 +268,7 @@ export class DocumentProcessorClient {
         type: 'PROCESS_FULL',
         bitmap,
         corners,
+        hintCorners,
         filter,
         magicColorOptions,
         bwOptions,
@@ -316,7 +339,14 @@ export class DocumentProcessorClient {
         timer,
       });
 
-      this.worker.postMessage(request, transfer);
+      try {
+        this.worker.postMessage(request, transfer);
+      } catch (err) {
+        // e.g. DataCloneError for a detached bitmap
+        clearTimeout(timer);
+        this.pendingTasks.delete(request.taskId);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
