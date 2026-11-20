@@ -6,40 +6,259 @@
 <title>Doku Scan · Free offline document scanner</title>
 <meta name="description" content="Doku Scan is a free, open-source document scanner for Android that works offline. No account, no ads, no tracking.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #09090b;
+    color: #fafafa;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.6;
+  }
+  a { color: #fb7185; text-decoration: none; }
+  a:hover { color: #fda4af; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; height: 72px; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 12px; color: #fafafa; font-weight: 700; font-size: 18px; letter-spacing: 0.02em; }
+  .brand:hover { color: #fafafa; }
+  .nav { display: flex; align-items: center; gap: 28px; font-size: 15px; }
+  .nav a { color: #a1a1aa; }
+  .nav a:hover { color: #fafafa; }
+
+  .btn { display: inline-block; padding: 14px 24px; border-radius: 999px; font-weight: 600; font-size: 16px; }
+  .btn-primary { background: #fb7185; color: #09090b; }
+  .btn-primary:hover { background: #fda4af; color: #09090b; }
+  .btn-ghost { border: 1px solid #3f3f46; color: #fafafa; }
+  .btn-ghost:hover { border-color: #71717a; color: #fafafa; }
+  .btn-small { padding: 9px 18px; font-size: 14px; }
+  .btn-large { padding: 16px 30px; font-size: 17px; }
+
+  .eyebrow { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: #fb7185; font-weight: 600; }
+  h1, h2 { margin: 0; font-weight: 700; text-wrap: balance; }
+  h1 { font-size: 68px; line-height: 1.02; letter-spacing: -0.035em; }
+  h2 { font-size: 44px; line-height: 1.1; letter-spacing: -0.025em; }
+
+  .hero { display: flex; align-items: center; gap: 64px; flex-wrap: wrap; padding-top: 56px; padding-bottom: 96px; }
+  .hero-copy { flex: 1 1 480px; min-width: 0; }
+  .hero h1 { margin: 18px 0 22px; }
+  .lead { margin: 0 0 36px; font-size: 20px; line-height: 1.6; color: #a1a1aa; max-width: 32em; }
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .fine { margin: 22px 0 0; font-size: 14px; color: #71717a; }
+
+  .phone-wrap { flex: 0 1 340px; margin: 0 auto; min-width: 0; }
+  .phone {
+    position: relative; width: 300px; max-width: 100%; height: 600px; margin: 0 auto;
+    border-radius: 44px; background: #18181b; border: 1px solid #3f3f46; padding: 14px;
+    box-shadow: 0 40px 80px -30px rgba(251, 113, 133, 0.25);
+  }
+  .screen {
+    position: relative; width: 100%; height: 100%; border-radius: 32px; overflow: hidden;
+    background: linear-gradient(160deg, #27272a 0%, #09090b 100%);
+  }
+  .statusbar { position: absolute; left: 0; right: 0; top: 0; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; font-size: 12px; color: #a1a1aa; font-weight: 600; }
+  .paper { position: absolute; left: 34px; top: 88px; width: 232px; height: 330px; transform: rotate(-4deg); background: #f4f4f5; border-radius: 6px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5); }
+  .paper i { position: absolute; left: 26px; height: 8px; border-radius: 4px; background: #a1a1aa; display: block; }
+  .paper i.title { top: 34px; width: 150px; height: 12px; background: #18181b; }
+  .outline { position: absolute; left: 34px; top: 88px; width: 232px; height: 330px; transform: rotate(-4deg); border: 2px solid #fb7185; border-radius: 6px; box-sizing: border-box; }
+  .handle { position: absolute; width: 18px; height: 18px; border-radius: 999px; background: #fb7185; border: 3px solid #09090b; transform: rotate(-4deg); }
+  .shutter { position: absolute; left: 0; right: 0; bottom: 0; height: 120px; display: flex; align-items: center; justify-content: center; background: linear-gradient(0deg, #09090b 60%, transparent); }
+  .shutter-ring { width: 68px; height: 68px; border-radius: 999px; border: 4px solid #fafafa; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
+  .shutter-ring span { width: 52px; height: 52px; border-radius: 999px; background: #fafafa; display: block; }
+
+  .strip { border-top: 1px solid #27272a; border-bottom: 1px solid #27272a; }
+  .strip .wrap { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 26px; padding-bottom: 26px; font-size: 15px; color: #a1a1aa; }
+  .strip strong { color: #fafafa; font-weight: 600; }
+
+  section { padding-top: 104px; }
+  section.tight { padding-top: 88px; }
+  .section-head { margin: 14px 0 48px; }
+
+  .steps, .features { display: flex; gap: 20px; flex-wrap: wrap; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card { background: #111114; border: 1px solid #27272a; border-radius: 20px; padding: 28px; flex: 1 1 280px; min-width: 0; }
+  .card h3 { margin: 0 0 8px; font-size: 19px; font-weight: 600; color: #fafafa; }
+  .card p { margin: 0; color: #a1a1aa; line-height: 1.6; font-size: 15px; }
+  .step-n { font-size: 14px; font-weight: 600; color: #09090b; background: #fb7185; width: 32px; height: 32px; border-radius: 999px; display: flex; align-items: center; justify-content: center; }
+  .card .step-n + h3 { margin-top: 22px; }
+
+  .privacy { display: flex; gap: 56px; align-items: flex-start; flex-wrap: wrap; border: 1px solid #27272a; border-radius: 24px; padding: 48px; background: #111114; }
+  .privacy > div { flex: 1 1 320px; min-width: 0; }
+  .privacy h2 { margin-top: 14px; font-size: 34px; line-height: 1.15; letter-spacing: -0.02em; }
+  .privacy-body { font-size: 16px; line-height: 1.7; color: #a1a1aa; }
+  .privacy-body p { margin: 0 0 16px; }
+  .privacy-body a { font-weight: 600; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; color: #fafafa; background: #18181b; padding: 2px 6px; border-radius: 6px; }
+
+  .final { text-align: center; padding-bottom: 96px; }
+  .final h2 { margin: 0 auto 18px; font-size: 48px; line-height: 1.08; letter-spacing: -0.03em; max-width: 14em; }
+  .final p { margin: 0 auto 36px; font-size: 18px; color: #a1a1aa; max-width: 32em; line-height: 1.6; }
+
+  .foot { border-top: 1px solid #27272a; }
+  .foot .wrap { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding-top: 28px; padding-bottom: 28px; font-size: 14px; color: #71717a; }
+  .foot-links { display: flex; gap: 22px; flex-wrap: wrap; }
+  .foot-links a { color: #a1a1aa; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px; }
+    .nav { gap: 16px; font-size: 14px; }
+    .nav .hide-small { display: none; }
+    h1 { font-size: 42px; }
+    h2 { font-size: 32px; }
+    .final h2 { font-size: 34px; }
+    .lead { font-size: 18px; }
+    .hero { padding-top: 32px; padding-bottom: 64px; }
+    .privacy { padding: 28px; }
+    .privacy h2 { font-size: 26px; }
+    section { padding-top: 72px; }
+    section.tight { padding-top: 64px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
 </head>
 <body>
-<header class="bar"><a class="brand" href="./"><img src="icon.svg" alt="" width="28" height="28"> Doku Scan</a></header>
+
+<header class="wrap top">
+  <a class="brand" href="./">
+    <svg width="32" height="32" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="120" fill="#18181b"/><g transform="translate(128,40) scale(0.5)"><circle cx="256" cy="256" r="160" fill="none" stroke="#3f3f46" stroke-width="16"/><path d="M256 70v26M256 442v-26M70 256h26M442 256h-26" stroke="#fb7185" stroke-width="12" stroke-linecap="round"/><rect x="200" y="140" width="160" height="200" rx="8" fill="none" stroke="#71717a" stroke-width="16"/><rect x="150" y="190" width="160" height="200" rx="8" fill="#18181b" stroke="#ffffff" stroke-width="20"/><rect x="180" y="230" width="100" height="12" rx="6" fill="#ffffff"/><rect x="180" y="260" width="70" height="12" rx="6" fill="#ffffff"/></g></svg>
+    Doku Scan
+  </a>
+  <nav class="nav">
+    <a class="hide-small" href="privacy.html">Privacy</a>
+    <a class="hide-small" href="https://github.com/rumman999/doku-scan">Source code</a>
+    <a class="btn btn-ghost btn-small" href="https://github.com/rumman999/doku-scan/releases/latest">Download</a>
+  </nav>
+</header>
+
 <main>
-<section class="hero">
-  <img src="icon.svg" alt="Doku Scan logo" width="96" height="96">
-  <h1>Scan documents.<br>Keep them yours.</h1>
-  <p class="lead">Doku Scan is a free, open-source document scanner for Android. It works fully offline:
-  no account, no ads, no tracking.</p>
-  <p class="cta"><a class="btn" href="https://github.com/rumman999/doku-scan/releases">Download</a>
-  <a class="btn ghost" href="https://github.com/rumman999/doku-scan">Source code</a></p>
-</section>
+  <div class="wrap hero">
+    <div class="hero-copy">
+      <div class="eyebrow">Free and open source</div>
+      <h1>Scan any page.<br>It never leaves your phone.</h1>
+      <p class="lead">Doku Scan turns your camera into a document scanner. It works fully offline, with no account, no ads and no tracking.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/rumman999/doku-scan/releases/latest">Download for Android</a>
+        <a class="btn btn-ghost" href="https://github.com/rumman999/doku-scan">View source</a>
+      </div>
+      <p class="fine">Android 7.0 or newer. Free, MIT licensed.</p>
+    </div>
 
-<section class="grid">
-  <div><h2>Finds the page</h2><p>Live edge detection outlines the document as you aim, and can capture
-  automatically when you hold still.</p></div>
-  <div><h2>Flattens and cleans it</h2><p>Perspective correction plus enhanced-colour and black-and-white filters
-  remove shadows and sharpen text, all on your phone.</p></div>
-  <div><h2>Your library, on your device</h2><p>Multi-page documents you can rename, reorder, merge and export
-  as PDF, with optional watermark and password.</p></div>
-  <div><h2>Optional Google Drive backup</h2><p>Back up to a folder in your own Google Drive and restore
-  everything after reinstalling. The app can only access files it creates there.</p></div>
-</section>
+    <div class="phone-wrap" aria-hidden="true">
+      <div class="phone">
+        <div class="screen">
+          <div class="statusbar"><span>9:41</span><span>100%</span></div>
+          <div class="paper">
+            <i class="title" style="left:26px"></i>
+            <i style="top:62px;width:180px"></i>
+            <i style="top:80px;width:160px"></i>
+            <i style="top:98px;width:172px"></i>
+            <i style="top:132px;width:120px"></i>
+            <i style="top:150px;width:180px"></i>
+            <i style="top:168px;width:140px"></i>
+            <i style="top:202px;width:180px"></i>
+            <i style="top:220px;width:150px"></i>
+          </div>
+          <div class="outline"></div>
+          <div class="handle" style="left:24px;top:78px"></div>
+          <div class="handle" style="left:262px;top:68px"></div>
+          <div class="handle" style="left:250px;top:398px"></div>
+          <div class="handle" style="left:14px;top:388px"></div>
+          <div class="shutter"><div class="shutter-ring"><span></span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-<section class="doc">
-  <h2>How Doku Scan uses your Google data</h2>
-  <p>Google Drive backup is optional and off by default. If you connect it, Doku Scan asks only for the
-  <code>drive.file</code> permission, uploads your scanned pages and a small list of document names and page
-  order to a folder you name in your own Google Drive, and downloads them again when you restore. Data goes
-  directly between your phone and Google; there are no other servers. Read the full
-  <a href="privacy.html">Privacy Policy</a>.</p>
-</section>
+  <div class="strip">
+    <div class="wrap">
+      <span><strong>Offline</strong> by default</span>
+      <span><strong>No account</strong> to create</span>
+      <span><strong>No ads</strong>, no trackers</span>
+      <span><strong>Open source</strong>, MIT license</span>
+    </div>
+  </div>
+
+  <section class="wrap">
+    <div class="eyebrow">How it works</div>
+    <h2 class="section-head">Three steps from paper to PDF.</h2>
+    <div class="steps">
+      <div class="card">
+        <div class="step-n">1</div>
+        <h3>Aim at the page</h3>
+        <p>The outline follows the page as you move the camera. Auto-capture takes the photo when the page is still.</p>
+      </div>
+      <div class="card">
+        <div class="step-n">2</div>
+        <h3>Crop and clean up</h3>
+        <p>Drag the corners to fit the page. The page is flattened straight on, then Enhanced or black-and-white removes shadows.</p>
+      </div>
+      <div class="card">
+        <div class="step-n">3</div>
+        <h3>Save and share</h3>
+        <p>Pages go into your library on the phone. Export a PDF with an optional watermark or password, then share it.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tight">
+    <div class="eyebrow">Built for everyday papers</div>
+    <h2 class="section-head">Everything a scanner needs, nothing it doesn't.</h2>
+    <div class="features">
+      <div class="card">
+        <h3>Library on your device</h3>
+        <p>Multi-page documents you can rename, reorder, merge, view full screen and delete. Everything is kept in your browser storage on the phone.</p>
+      </div>
+      <div class="card">
+        <h3>Single and batch</h3>
+        <p>Scan one page at a time, or shoot a stack in batch mode while earlier pages are processed in the background.</p>
+      </div>
+      <div class="card">
+        <h3>PDF export</h3>
+        <p>Choose A4, Letter or auto page size and a quality preset. Add an optional watermark or password.</p>
+      </div>
+      <div class="card">
+        <h3>Optional Google Drive backup</h3>
+        <p>Back up to a folder in your own Drive and restore it after reinstalling. The app can only see files it created.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tight">
+    <div class="privacy">
+      <div>
+        <div class="eyebrow">Your data</div>
+        <h2>Your scans stay on your phone unless you choose otherwise.</h2>
+      </div>
+      <div class="privacy-body">
+        <p>Doku Scan has no servers. Nothing is uploaded unless you turn on Google Drive backup, and then pages go straight from your phone to a folder in your own Drive.</p>
+        <p>The app asks Google only for the <code>drive.file</code> permission, so it cannot see the rest of your Drive.</p>
+        <a href="privacy.html">Read the privacy policy</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tight final">
+    <h2>Scan your first page in under a minute.</h2>
+    <p>Download the APK, open it on your Android phone, and point the camera at a page.</p>
+    <a class="btn btn-primary btn-large" href="https://github.com/rumman999/doku-scan/releases/latest">Download for Android</a>
+  </section>
 </main>
-<footer class="foot"><a href="./">Home</a> · <a href="privacy.html">Privacy Policy</a> · <a href="https://github.com/rumman999/doku-scan">Source code</a></footer>
+
+<footer class="foot">
+  <div class="wrap">
+    <span>Doku Scan, MIT license</span>
+    <span class="foot-links">
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="https://github.com/rumman999/doku-scan">Source code</a>
+      <a href="https://github.com/rumman999/doku-scan/releases">Releases</a>
+    </span>
+  </div>
+</footer>
+
 </body>
 </html>
