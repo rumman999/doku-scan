@@ -75,8 +75,8 @@
   .strip .wrap { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 26px; padding-bottom: 26px; font-size: 15px; color: #a1a1aa; }
   .strip strong { color: #fafafa; font-weight: 600; }
 
-  section { padding-top: 104px; }
-  section.tight { padding-top: 88px; }
+  .block { padding-top: 104px; }
+  .block.tight { padding-top: 88px; }
   .section-head { margin: 14px 0 48px; }
 
   .steps, .features { display: flex; gap: 20px; flex-wrap: wrap; }
@@ -115,8 +115,8 @@
     .hero { padding-top: 32px; padding-bottom: 64px; }
     .privacy { padding: 28px; }
     .privacy h2 { font-size: 26px; }
-    section { padding-top: 72px; }
-    section.tight { padding-top: 64px; }
+    .block { padding-top: 72px; }
+    .block.tight { padding-top: 64px; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
@@ -125,7 +125,7 @@
 
 <header class="wrap top">
   <a class="brand" href="./">
-    <svg width="32" height="32" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="120" fill="#18181b"/><g transform="translate(128,40) scale(0.5)"><circle cx="256" cy="256" r="160" fill="none" stroke="#3f3f46" stroke-width="16"/><path d="M256 70v26M256 442v-26M70 256h26M442 256h-26" stroke="#fb7185" stroke-width="12" stroke-linecap="round"/><rect x="200" y="140" width="160" height="200" rx="8" fill="none" stroke="#71717a" stroke-width="16"/><rect x="150" y="190" width="160" height="200" rx="8" fill="#18181b" stroke="#ffffff" stroke-width="20"/><rect x="180" y="230" width="100" height="12" rx="6" fill="#ffffff"/><rect x="180" y="260" width="70" height="12" rx="6" fill="#ffffff"/></g></svg>
+    <img src="icon.svg" alt="" width="40" height="40">
     Doku Scan
   </a>
   <nav class="nav">
@@ -183,7 +183,7 @@
     </div>
   </div>
 
-  <section class="wrap">
+  <section class="wrap block">
     <div class="eyebrow">How it works</div>
     <h2 class="section-head">Three steps from paper to PDF.</h2>
     <div class="steps">
@@ -205,7 +205,7 @@
     </div>
   </section>
 
-  <section class="wrap tight">
+  <section class="wrap block tight">
     <div class="eyebrow">Built for everyday papers</div>
     <h2 class="section-head">Everything a scanner needs, nothing it doesn't.</h2>
     <div class="features">
@@ -228,7 +228,7 @@
     </div>
   </section>
 
-  <section class="wrap tight">
+  <section class="wrap block tight">
     <div class="privacy">
       <div>
         <div class="eyebrow">Your data</div>
@@ -242,7 +242,7 @@
     </div>
   </section>
 
-  <section class="wrap tight final">
+  <section class="wrap block tight final">
     <h2>Scan your first page in under a minute.</h2>
     <p>Download the APK, open it on your Android phone, and point the camera at a page.</p>
     <a class="btn btn-primary btn-large" href="https://github.com/rumman999/doku-scan/releases/latest">Download for Android</a>
