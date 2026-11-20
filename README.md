@@ -10,6 +10,8 @@ No account, no ads, no tracking.
 [Website](https://rumman.is-a.dev/doku-scan/) ·
 [Privacy Policy](https://rumman.is-a.dev/doku-scan/privacy.html)
 
+![Downloads](https://img.shields.io/github/downloads/rumman999/doku-scan/total)
+
 </div>
 
 Scans stay on your phone. Nothing leaves the device unless you share a PDF or turn on the optional
