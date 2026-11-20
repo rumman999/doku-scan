@@ -70,6 +70,22 @@ Drive layout: `<your folder>/<document>/page-*.jpg` + `doc.json`. Deleting a doc
 Drive copy to the Drive trash (recoverable for 30 days). After reinstalling, connect and choose the
 existing folder to restore.
 
+## Release builds
+
+Release APKs are signed with a key that is **not** in this repo. Create `android/keystore.properties`
+(git-ignored):
+
+```properties
+storeFile=/absolute/path/to/release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
+Then `pnpm build && npx cap sync android && cd android && ./gradlew assembleRelease`. The signed APK is
+`android/app/build/outputs/apk/release/app-release.apk`. Google sign-in only works for APKs signed with
+a key whose SHA-1 is registered as an Android client in the Google Cloud project (see above).
+
 ## Architecture
 - `app/` — screens: library (`/`), document (`/doc?id=`), scanner (`/scan`), settings.
 - `lib/cv/` — detection, dewarp and filters (OpenCV.js). `lib/cv/worker.ts` is bundled to `public/cv-worker.js` by `scripts/build-worker.mjs`; `public/opencv.js` is vendored OpenCV 4.8.0.
