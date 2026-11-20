@@ -763,7 +763,7 @@ export function detectDocumentCorners(
 /**
  * Rectifies and dewarps a document quadrilateral into a top-down, high-resolution matrix.
  *
- * Implements document scanner dewarp:
+ * Steps:
  * 1. Orders corner points canonically: [TL, TR, BR, BL]
  * 2. Computes the true physical aspect ratio from maximum edge lengths
  * 3. Applies high-performance homography perspective warp (cv.warpPerspective)

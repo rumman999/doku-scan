@@ -1,19 +1,15 @@
 ﻿/**
- * Document Image Enhancement Filters Module
+ * Document image enhancement filters (OpenCV.js).
  *
- * Implements high-performance filters using standard image-processing techniques:
+ * 1. Enhanced colour ("magic-color" in code):
+ *    - Background illumination division, (pixel / local background) * 255, which
+ *      whitens paper and removes shadows (a standard flat-field correction)
+ *    - Unsharp masking for crisp ink edges
+ *    - Gentle saturation boost so pen, stamp and highlighter colours stay vivid
  *
- * 1. Magic Color Filter:
- *    - Local background illumination division normalization: (pixel / background) * 255.0
- *    - Unsharp masking (Gaussian blur subtraction + weighted addition) for crisp ink edges
- *    - Targeted color saturation & contrast boosting to maintain vivid pen strokes/markers
- *
- * 2. Pure B&W / Document Binarization Filter:
- *    - Dual engine: Adaptive Gaussian Thresholding or Otsu's optimal global binarization
- *    - Pure black text (#000000) on pure white background (#ffffff)
- *
- * 3. WebGL Fragment Shaders:
- *    - GPU-accelerated shaders capable of processing 8-megapixel (3264x2448) images in <50ms
+ * 2. Black & white:
+ *    - Adaptive Gaussian thresholding or Otsu's global threshold
+ *    - Pure black text on a pure white page
  */
 
 export interface MagicColorOptions {
@@ -41,7 +37,7 @@ export interface BwFilterOptions {
 }
 
 /**
- * Applies the 'Magic Color' document filter using OpenCV.js matrix operations.
+ * Applies the enhanced-colour document filter using OpenCV.js matrix operations.
  *
  * Steps:
  * 1. Downsamples luminance to calculate local paper white background grid.
@@ -239,84 +235,3 @@ export function applyBwFilter(
     binary.delete();
   }
 }
-
-/**
- * High-Performance WebGL 2.0 / 1.0 GLSL Fragment Shader for Magic Color.
- *
- * Processes 8-megapixel (3264x2448) textures on the GPU in < 30ms.
- */
-export const MAGIC_COLOR_GLSL = `
-precision highp float;
-
-uniform sampler2D u_image;           // Source document texture
-uniform sampler2D u_backgroundMap;   // Low-res blurred illumination texture
-uniform float u_minBackground;       // Min background clamp floor (default 0.06)
-uniform float u_unsharpStrength;     // Sharpening multiplier (default 0.5)
-uniform float u_saturationBoost;     // Color saturation boost (default 1.25)
-uniform vec2 u_texelSize;            // 1.0 / vec2(width, height) for unsharp kernel
-
-varying vec2 v_texCoord;
-
-void main() {
-    vec4 center = texture2D(u_image, v_texCoord);
-    vec4 bg = texture2D(u_backgroundMap, v_texCoord);
-
-    // 1. Background illumination division normalization
-    vec3 safeBg = max(bg.rgb, vec3(max(u_minBackground, 0.05)));
-    vec3 normalized = clamp(center.rgb / safeBg, 0.0, 1.0);
-
-    // 2. Unsharp masking kernel on GPU
-    vec3 neighborSum = 
-        texture2D(u_image, v_texCoord + vec2(-u_texelSize.x, 0.0)).rgb +
-        texture2D(u_image, v_texCoord + vec2(u_texelSize.x, 0.0)).rgb +
-        texture2D(u_image, v_texCoord + vec2(0.0, -u_texelSize.y)).rgb +
-        texture2D(u_image, v_texCoord + vec2(0.0, u_texelSize.y)).rgb;
-    vec3 localBlur = neighborSum * 0.25;
-    vec3 sharpened = clamp(normalized + (center.rgb - localBlur) * u_unsharpStrength, 0.0, 1.0);
-
-    // 3. Targeted saturation boost for colored pens/ink
-    float luma = dot(sharpened, vec3(0.299, 0.587, 0.114));
-    vec3 saturated = mix(vec3(luma), sharpened, u_saturationBoost);
-
-    // 4. Whiten residual high-key paper tones
-    vec3 finalColor = mix(saturated, smoothstep(vec3(0.0), vec3(0.96), saturated), 0.35);
-
-    gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), center.a);
-}
-`;
-
-/**
- * High-Performance WebGL 2.0 / 1.0 GLSL Fragment Shader for Pure B&W.
- *
- * Implements GPU-accelerated local adaptive thresholding for pure black/white output.
- */
-export const BW_FILTER_GLSL = `
-precision highp float;
-
-uniform sampler2D u_image;
-uniform vec2 u_texelSize;
-uniform float u_thresholdOffset; // Default: 0.04 (corresponds to cConstant ~10/255)
-
-varying vec2 v_texCoord;
-
-void main() {
-    vec4 color = texture2D(u_image, v_texCoord);
-    float centerLuma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-
-    // Sample local 5x5 neighbourhood for mean adaptive threshold
-    float localSum = 0.0;
-    for (int y = -2; y <= 2; y++) {
-        for (int x = -2; x <= 2; x++) {
-            vec2 offset = vec2(float(x), float(y)) * u_texelSize * 2.0;
-            vec3 sampleColor = texture2D(u_image, v_texCoord + offset).rgb;
-            localSum += dot(sampleColor, vec3(0.299, 0.587, 0.114));
-        }
-    }
-    float localMean = localSum / 25.0;
-
-    // Pure black (#000000) or pure white (#ffffff)
-    float binary = (centerLuma < (localMean - u_thresholdOffset)) ? 0.0 : 1.0;
-
-    gl_FragColor = vec4(vec3(binary), color.a);
-}
-`;

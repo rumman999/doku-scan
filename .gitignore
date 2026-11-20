@@ -45,10 +45,10 @@ next-env.d.ts
 # scratch assets
 /logos/
 
-# local analysis files
-artifacts/document scanner/*
-!artifacts/document scanner/.gitkeep
-!artifacts/document scanner/README.md
 *.apk
 *.xapk
 *.so
+
+# local third-party analysis files: never commit
+/artifacts/
+*.apk

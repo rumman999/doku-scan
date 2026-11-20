@@ -188,7 +188,7 @@ export default function SettingsPage() {
               value={settings.defaultFilter}
               onChange={(v) => update({ defaultFilter: v })}
               options={[
-                { value: "magic-color", label: "Magic" },
+                { value: "magic-color", label: "Enhanced" },
                 { value: "bw", label: "B&W" },
                 { value: "none", label: "Original" },
               ]}

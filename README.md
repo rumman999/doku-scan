@@ -9,7 +9,7 @@ A free, fully offline document scanner. Built with Next.js (static export) and p
 ## Features
 - **Live edge detection**: OpenCV (WebAssembly, in a Web Worker) finds the page in the camera preview; optional auto-capture when the page holds still.
 - **Perspective crop**: drag the corners (with a magnifier) and the page is flattened to a top-down scan.
-- **Enhancement filters**: Magic Color (shadow removal + sharpening), Black & White, or Original.
+- **Enhancement filters**: Enhanced (shadow removal + sharpening), Black & White, or Original.
 - **Single and batch modes**: batch keeps shooting while pages process in the background.
 - **Document library**: scans are saved on the device (IndexedDB). Rename, reorder, remove or add pages, view full screen, merge documents, delete.
 - **PDF export**: A4 / Letter / Auto page size, quality presets, optional watermark and password; shared via the native share sheet.

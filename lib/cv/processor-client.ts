@@ -192,7 +192,7 @@ export class DocumentProcessorClient {
   }
 
   /**
-   * Applies document scanner 'Magic Color' filter (illumination division + unsharp mask + saturation boost).
+   * Applies the enhanced-colour filter (illumination division + unsharp mask + saturation boost).
    */
   public async magicColor(
     source: ImageBitmap | HTMLCanvasElement | HTMLImageElement | Blob | ImageData,

@@ -37,7 +37,7 @@ const REARM_MOVE = 0.08
 const OUTLINE_EASE = 0.35
 const ACCENT = "#3b82f6"
 
-const FILTER_LABELS: Record<ScanFilter, string> = { "magic-color": "Magic", bw: "B&W", none: "Original" }
+const FILTER_LABELS: Record<ScanFilter, string> = { "magic-color": "Enhanced", bw: "B&W", none: "Original" }
 const FILTER_CYCLE: ScanFilter[] = ["magic-color", "bw", "none"]
 
 /** Render `page` with `filter` into a new bitmap. Never closes or transfers `page`. */

@@ -8,7 +8,7 @@ import type { ScanFilter } from "@/lib/settings"
 import { MAGIC_COLOR_OPTIONS, BW_OPTIONS } from "@/lib/cv/presets"
 
 const FILTERS: { value: ScanFilter; label: string }[] = [
-  { value: "magic-color", label: "Magic Color" },
+  { value: "magic-color", label: "Enhanced" },
   { value: "bw", label: "B&W" },
   { value: "none", label: "Original" },
 ]
