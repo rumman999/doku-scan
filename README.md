@@ -2,50 +2,44 @@
   <img src="public/icon.svg" alt="Doku Scan Logo" width="160" height="160" />
 </div>
 
-# Doku Scan MVP
+# Doku Scan
 
-A fully offline, local-first document scanning application built with Next.js and natively packaged for mobile devices via Capacitor.
+A free, fully offline document scanner. Built with Next.js (static export) and packaged for Android/iOS with Capacitor. No account, no cloud, no tracking: scans stay on the device unless you share them.
 
 ## Features
-- **Native Camera Capture**: Snaps high-quality document photos directly via the device's native camera plugin (Capacitor), circumventing mobile browser memory limitations.
-- **Client-Side Cropping**: Adjust the perspective and borders of your document cleanly using `react-image-crop` and HTML5 Canvas.
-- **Multi-Page Support**: Continuously scan and append as many pages as you need into a single local gallery state before finalizing.
-- **Native PDF Export**: Generates an A4 PDF containing all scanned pages perfectly fit using `jspdf`, and seamlessly writes the raw binary directly to the Android/iOS filesystem via `@capacitor/filesystem`.
-- **Zero API Footprint**: Works completely offline.
+- **Live edge detection**: OpenCV (WebAssembly, in a Web Worker) finds the page in the camera preview; optional auto-capture when the page holds still.
+- **Perspective crop**: drag the corners (with a magnifier) and the page is flattened to a top-down scan.
+- **Enhancement filters**: Magic Color (shadow removal + sharpening), Black & White, or Original.
+- **Single and batch modes**: batch keeps shooting while pages process in the background.
+- **Document library**: scans are saved on the device (IndexedDB). Rename, reorder, remove or add pages, view full screen, merge documents, delete.
+- **PDF export**: A4 / Letter / Auto page size, quality presets, optional watermark and password; shared via the native share sheet.
 
-## Architecture & Stack
-- **Framework**: Next.js 14 (App Router, Static Export)
-- **UI & Styling**: Tailwind CSS, Shadcn UI, Lucide Icons
-- **Native Shell**: CapacitorJS (iOS & Android)
-- **Filesystem**: @capacitor/filesystem
-- **PDF Generation**: jsPDF
+## Development
 
-## Local Development
-
-### 1. Web Preview
-To preview and test the application in a local browser with PWA elements injected (for camera emulation):
 ```bash
 pnpm install
-pnpm dev
+pnpm dev          # http://localhost:3000 (camera works on localhost)
+pnpm typecheck
+pnpm build        # static export to out/ (type errors fail the build)
 ```
-*Note: A fallback web camera UI will slide up to allow testing the crop and OCR flows without a physical device.*
 
-### 2. Native Mobile Development
-Since this project is configured for static export (`output: 'export'`), you must build the web assets before synchronizing them to the native shell.
+### Android
+
+Requires JDK 21 (`JAVA_HOME`) and the Android SDK (`ANDROID_HOME`).
 
 ```bash
-# 1. Build the static Next.js export (/out)
 pnpm build
-
-# 2. Sync the assets to iOS and Android
-npx cap sync
-
-# 3. Open the native IDEs to build and deploy to a device
-npx cap open ios
-npx cap open android
+npx cap sync android
+npx cap run android      # or: npx cap open android
 ```
 
-## Maintenance Notes
-- **Filesystem Access**: Native export requires correct OS permissions for writing to the `Documents` directory. 
-- **Static Assets**: The `next.config.mjs` disables Image optimization (`unoptimized: true`) as required by native static environments.
-- **State Handoff**: `sessionStorage` is utilized to safely proxy captured blob URLs between the Library page and the Scanner UI before they are actively cropped.
+Debug the app's WebView from desktop Chrome at `chrome://inspect`.
+
+## Architecture
+- `app/` — screens: library (`/`), document (`/doc?id=`), scanner (`/scan`), settings.
+- `lib/cv/` — detection, dewarp and filters (OpenCV.js). `lib/cv/worker.ts` is bundled to `public/cv-worker.js` by `scripts/build-worker.mjs`; `public/opencv.js` is vendored OpenCV 4.8.0.
+- `lib/db/indexed-db.ts` — pages (full-res JPEG + thumbnail) and documents. Pages belong to a session: `current`/`single` while scanning, `doc:<id>` once saved. Saving moves pages in one transaction.
+- `lib/pdf/export-pdf.ts` — streams pages one at a time into jsPDF, then shares/downloads.
+- `lib/settings.ts` — user defaults (localStorage).
+
+Note: PDF passwords use jsPDF's built-in RC4 encryption. It keeps casual readers out but is not strong encryption.

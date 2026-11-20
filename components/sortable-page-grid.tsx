@@ -62,11 +62,16 @@ export function SortablePageGrid({
   pages,
   onReorder,
   onRemove,
+  onOpen,
 }: {
   pages: BatchPage[]
   onReorder: (orderedIds: string[]) => void
   onRemove: (id: string) => void
+  /** Called on a plain tap (not after a drag). */
+  onOpen?: (id: string) => void
 }) {
+  /** True from drag start until just after release, so the release isn't treated as a tap. */
+  const suppressClickRef = useRef(false)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const itemRefs = useRef(new Map<string, HTMLDivElement>())
   const dragRef = useRef<DragState | null>(null)
@@ -163,6 +168,7 @@ export function SortablePageGrid({
       const from = pages.findIndex((p) => p.id === press.id)
       const card = press.el.getBoundingClientRect()
 
+      suppressClickRef.current = true
       dragRef.current = {
         id: press.id,
         pointerId: press.pointerId,
@@ -197,6 +203,10 @@ export function SortablePageGrid({
       const el = itemRefs.current.get(drag.id)
       if (el) el.style.transform = ""
       dragRef.current = null
+      // The click event for this release fires after pointerup; clear afterwards.
+      window.setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
 
       const from = pages.findIndex((p) => p.id === drag.id)
       const to = overIndexRef.current
@@ -339,7 +349,18 @@ export function SortablePageGrid({
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            onKeyDown={(e) => onKeyDown(e, index)}
+            onClick={() => {
+              if (suppressClickRef.current || dragId) return
+              onOpen?.(page.id)
+            }}
+            onKeyDown={(e) => {
+              if (onOpen && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault()
+                onOpen(page.id)
+                return
+              }
+              onKeyDown(e, index)
+            }}
             onContextMenu={(e) => e.preventDefault()}
             className={cn(
               "group relative aspect-[3/4] cursor-grab touch-manipulation select-none overflow-hidden rounded-xl border border-border bg-secondary outline-none",
@@ -366,7 +387,10 @@ export function SortablePageGrid({
                 type="button"
                 aria-label={`Remove page ${index + 1}`}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => onRemove(page.id)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRemove(page.id)
+                }}
                 className="absolute right-1 top-1 flex size-7 items-center justify-center rounded-full bg-foreground/60 text-background opacity-100 transition-opacity hover:bg-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
               >
                 <X className="size-3.5" />

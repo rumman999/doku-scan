@@ -1,121 +1,147 @@
 ﻿"use client"
 
-import React, { useState, useEffect, useRef, useCallback } from "react"
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Camera, RefreshCw, Sparkles, Zap, ZapOff, ChevronRight, Loader2 } from "lucide-react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Camera, Loader2, RefreshCw, Sparkles, X, Zap, ZapOff } from "lucide-react"
 import { Capacitor } from "@capacitor/core"
 import { Camera as CameraPlugin } from "@capacitor/camera"
-import { Button } from "@/components/ui/button"
 import { CropView } from "@/components/crop-view"
-import { PdfExportSheet } from "@/components/pdf-export-sheet"
+import { FilterReview } from "@/components/filter-review"
 import { useScanBatch } from "@/hooks/use-scan-batch"
+import { appendSessionToDocument, createDocumentFromSession } from "@/lib/db/indexed-db"
+import { loadSettings, type ScanFilter } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { documentProcessor } from "@/lib/cv/processor-client"
-import { Point } from "@/lib/cv/document-processor"
+import type { Point } from "@/lib/cv/document-processor"
+import { BW_OPTIONS, MAGIC_COLOR_OPTIONS } from "@/lib/cv/presets"
 
 type ScanMode = "single" | "batch"
-type FilterMode = "magic-color" | "bw" | "none"
-type Screen = "camera" | "crop" | "saving"
+type Screen = "camera" | "crop" | "review"
 
-const MAGIC_COLOR_OPTIONS = { unsharpStrength: 0.6, saturationBoost: 1.25 }
-const BW_OPTIONS = { method: "adaptive-gaussian" as const, blockSize: 21, cConstant: 10 }
-const RAW_FRAME_JPEG_QUALITY = 0.95
-/** Consecutive steady detections needed before auto-capture fires (~1.5s at 500ms polling). */
-const AUTO_CAPTURE_STEADY_FRAMES = 3
-/** Max corner drift between polls, as a fraction of the frame's long side, to count as "steady". */
-const STEADY_TOLERANCE = 0.02
+const RAW_FRAME_JPEG_QUALITY = 0.92
+/** Long side of the downscaled frame sent to the detector. */
+const DETECT_MAX_SIDE = 640
+/** Minimum time between detection passes (~10/s max); keeps the outline live without hogging the phone. */
+const DETECT_MIN_INTERVAL_MS = 100
+/** Consecutive misses before the outline is dropped (prevents flicker on a single bad frame). */
+const LOST_AFTER_MISSES = 3
+/** How long the page must hold still before auto-capture fires. */
+const STEADY_MS = 1200
+/** Max corner drift (fraction of the frame's long side) that still counts as holding still. */
+const STEADY_TOLERANCE = 0.025
+/** After an auto-capture, re-arm once the page moves this far (next page placed) or is lost. */
+const REARM_MOVE = 0.08
+/** Outline easing per animation frame (0..1). Higher = snappier, lower = smoother. */
+const OUTLINE_EASE = 0.35
+const ACCENT = "#3b82f6"
 
-/**
- * Apply the selected enhancement filter to an already-cropped page.
- * Takes ownership of `page`: it is either returned or closed.
- */
-async function applyFilter(page: ImageBitmap, filter: FilterMode): Promise<ImageBitmap> {
-  if (filter === "none") return page
-  try {
-    // The worker call transfers (detaches) its input, so send a copy and keep
-    // the original as a fallback if filtering fails.
-    const copy = await createImageBitmap(page)
-    const filtered =
-      filter === "magic-color"
-        ? await documentProcessor.magicColor(copy, MAGIC_COLOR_OPTIONS)
-        : await documentProcessor.applyBw(copy, BW_OPTIONS)
-    page.close()
-    return filtered
-  } catch (err) {
-    console.warn("[Filter] failed, keeping unfiltered page", err)
-    return page
-  }
+const FILTER_LABELS: Record<ScanFilter, string> = { "magic-color": "Magic", bw: "B&W", none: "Original" }
+const FILTER_CYCLE: ScanFilter[] = ["magic-color", "bw", "none"]
+
+/** Render `page` with `filter` into a new bitmap. Never closes or transfers `page`. */
+async function renderFiltered(page: ImageBitmap, filter: ScanFilter): Promise<ImageBitmap> {
+  const copy = await createImageBitmap(page)
+  if (filter === "magic-color") return documentProcessor.magicColor(copy, MAGIC_COLOR_OPTIONS)
+  if (filter === "bw") return documentProcessor.applyBw(copy, BW_OPTIONS)
+  return copy
 }
 
-/** True when every corner moved less than `tolerance` pixels since the previous detection. */
-function cornersSteady(prev: Point[] | null, next: Point[], tolerance: number): boolean {
-  if (!prev || prev.length !== 4) return false
-  return next.every((p, i) => Math.hypot(p.x - prev[i].x, p.y - prev[i].y) <= tolerance)
+function maxCornerShift(a: Point[], b: Point[]): number {
+  return Math.max(...a.map((p, i) => Math.hypot(p.x - b[i].x, p.y - b[i].y)))
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export default function ScanPage() {
-  // Video and Canvas Refs
+  // useSearchParams needs a Suspense boundary in a static export.
+  return (
+    <Suspense fallback={<main className="h-dvh w-full bg-black" />}>
+      <ScanScreen />
+    </Suspense>
+  )
+}
+
+function ScanScreen() {
+  const router = useRouter()
+  /** When set, captured pages are appended to this existing document. */
+  const targetDocId = useSearchParams().get("doc")
+  const returnHref = targetDocId ? `/doc?id=${encodeURIComponent(targetDocId)}` : "/"
+
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const sampleCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const previewRef = useRef<HTMLDivElement | null>(null)
+  const overlayRef = useRef<HTMLCanvasElement | null>(null)
+  const progressRef = useRef<SVGCircleElement | null>(null)
+  const shutterRef = useRef<HTMLButtonElement | null>(null)
+  const flashRef = useRef<HTMLDivElement | null>(null)
+  const thumbRef = useRef<HTMLDivElement | null>(null)
   /** Reused full-resolution canvas for shutter captures. */
   const frameCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const flashRef = useRef<HTMLDivElement | null>(null)
-  const badgeRef = useRef<HTMLDivElement | null>(null)
 
-  // Stream & Hardware State
+  // Camera
   const streamRef = useRef<MediaStream | null>(null)
-  const [cameraActive, setCameraActive] = useState<boolean>(false)
-  const [cameraError, setCameraError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  const mountedRef = useRef<boolean>(true)
+  const mountedRef = useRef(true)
   /** Bumped on every (re)start/stop so a slow getUserMedia from an older attempt is discarded. */
-  const cameraAttemptRef = useRef<number>(0)
-  const [torchEnabled, setTorchEnabled] = useState<boolean>(false)
-  const [hasTorch, setHasTorch] = useState<boolean>(false)
+  const cameraAttemptRef = useRef(0)
+  const [cameraActive, setCameraActive] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [hasTorch, setHasTorch] = useState(false)
+  const [torchEnabled, setTorchEnabled] = useState(false)
 
-  // CV Detection & Overlay State
-  const [detectedCorners, setDetectedCorners] = useState<Point[] | null>(null)
-  const [autoCapture, setAutoCapture] = useState<boolean>(false)
-  const [filterMode, setFilterMode] = useState<FilterMode>("magic-color")
+  // Options (seeded from settings)
   const [mode, setMode] = useState<ScanMode>("single")
+  const [filter, setFilter] = useState<ScanFilter>("magic-color")
+  const [autoCapture, setAutoCapture] = useState(false)
+  useEffect(() => {
+    const s = loadSettings()
+    setFilter(s.defaultFilter)
+    setMode(s.defaultMode)
+    setAutoCapture(s.autoCapture)
+  }, [])
 
-  // Flow State
+  // Flow
   const [screen, setScreen] = useState<Screen>("camera")
   const [cropSrc, setCropSrc] = useState<string | null>(null)
+  const cropSrcRef = useRef<string | null>(null)
   const [cropCorners, setCropCorners] = useState<Point[] | null>(null)
-  const [exportTarget, setExportTarget] = useState<ScanMode | null>(null)
+  const [reviewPage, setReviewPage] = useState<ImageBitmap | null>(null)
+  const reviewPageRef = useRef<ImageBitmap | null>(null)
+  reviewPageRef.current = reviewPage
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
 
-  // Full-res pages live in IndexedDB; only thumbnail URLs are held in memory.
-  // Single-mode scans get their own session so they never mix with a batch.
+  // Pages (full-res in IndexedDB; only thumbnails in memory)
   const batch = useScanBatch("current")
   const single = useScanBatch("single")
-
-  // Batch capture queue: frames are JPEG-encoded at the shutter (≈2MB each,
-  // instead of a 32MB RGBA bitmap) and processed serially in the background.
   const queueRef = useRef<Promise<void>>(Promise.resolve())
-  const [pendingCount, setPendingCount] = useState<number>(0)
-  const capturingRef = useRef<boolean>(false)
-  const [finishing, setFinishing] = useState<boolean>(false)
+  const [pendingCount, setPendingCount] = useState(0)
+  const capturingRef = useRef(false)
+  const [finishing, setFinishing] = useState(false)
 
-  // Auto-capture bookkeeping
-  const steadyCountRef = useRef<number>(0)
-  const lastCornersRef = useRef<Point[] | null>(null)
-  /** Disarmed after an auto-capture until the document leaves the frame. */
-  const autoArmedRef = useRef<boolean>(true)
+  // Detection (refs: updated ~10x/s without re-rendering React)
+  const targetRef = useRef<Point[] | null>(null)
+  const missesRef = useRef(0)
+  const anchorRef = useRef<Point[] | null>(null)
+  const steadySinceRef = useRef(0)
+  const autoArmedRef = useRef(true)
+  const autoCapturedAtRef = useRef<Point[] | null>(null)
+  const videoSizeRef = useRef({ w: 0, h: 0 })
+  // UI-facing detection state; only set when it actually changes.
+  const [detected, setDetected] = useState(false)
+  const [steady, setSteady] = useState(false)
 
-  // Latest values for use inside the polling interval
-  const settingsRef = useRef({ mode, filterMode, autoCapture })
-  settingsRef.current = { mode, filterMode, autoCapture }
+  const settingsRef = useRef({ mode, filter, autoCapture })
+  settingsRef.current = { mode, filter, autoCapture }
 
-  const detectionPaused = screen !== "camera" || exportTarget !== null
+  const detectionPaused = screen !== "camera" || finishing || saving
 
-  /**
-   * Request native permission (Capacitor), then open the rear camera stream.
-   */
+  /* ------------------------------------------------------------------ */
+  /* Camera lifecycle                                                    */
+  /* ------------------------------------------------------------------ */
+
   const stopCamera = useCallback(() => {
     cameraAttemptRef.current++
-    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
     setCameraActive(false)
@@ -127,97 +153,75 @@ export default function ScanPage() {
     const stale = () => !mountedRef.current || attempt !== cameraAttemptRef.current
     try {
       setCameraError(null)
-      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current?.getTracks().forEach((t) => t.stop())
       streamRef.current = null
       setTorchEnabled(false)
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setCameraError("This device or browser doesn't support camera access.")
-        setCameraActive(false)
         return
       }
 
-      // Inside the Android/iOS app the WebView can only open the camera once
-      // the OS-level permission is granted. (The plugin's web implementation
-      // throws "Not implemented", and browsers prompt via getUserMedia anyway.)
+      // In the Android/iOS app the WebView can only open the camera once the
+      // OS-level permission is granted.
       if (Capacitor.isNativePlatform()) {
         const { camera } = await CameraPlugin.requestPermissions({ permissions: ["camera"] })
         if (stale()) return
         if (camera !== "granted") {
-          setCameraError(
-            "Camera permission denied. Enable camera access for DokuScan in your device's app settings.",
-          )
-          setCameraActive(false)
+          setCameraError("Camera access is off. Allow it for Doku Scan in your phone's app settings.")
           return
         }
       }
 
+      // 1440p is plenty for documents and keeps the preview pipeline at full
+      // frame rate on mid-range phones (4K requests often drop it to ~15fps).
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
-          facingMode: "environment",
-          width: { ideal: 4096 },
-          height: { ideal: 2160 },
+          facingMode: { ideal: "environment" },
+          width: { ideal: 2560 },
+          height: { ideal: 1440 },
+          frameRate: { ideal: 30 },
         },
       })
-      // Unmounted or restarted while the permission prompt / camera startup was pending:
-      // release this stream, otherwise the camera (and its indicator light) stays on.
       if (stale()) {
         mediaStream.getTracks().forEach((t) => t.stop())
         return
       }
       streamRef.current = mediaStream
 
-      const videoTrack = mediaStream.getVideoTracks()[0]
-      if (videoTrack) {
-        const capabilities = (videoTrack.getCapabilities?.() as any) || {}
-        setHasTorch(Boolean(capabilities.torch))
-        // Best effort: continuous autofocus where the device exposes it.
-        if (capabilities.focusMode?.includes?.("continuous")) {
-          videoTrack
-            .applyConstraints({ advanced: [{ focusMode: "continuous" } as any] })
-            .catch(() => {})
+      const track = mediaStream.getVideoTracks()[0]
+      if (track) {
+        const caps = (track.getCapabilities?.() as any) || {}
+        setHasTorch(Boolean(caps.torch))
+        if (caps.focusMode?.includes?.("continuous")) {
+          track.applyConstraints({ advanced: [{ focusMode: "continuous" } as any] }).catch(() => {})
         }
       }
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream
-        await videoRef.current.play()
+      const video = videoRef.current
+      if (video) {
+        video.srcObject = mediaStream
+        await video.play()
         if (stale()) return
         setCameraActive(true)
       }
     } catch (err: any) {
-      if (stale()) return
-      // play() rejects with AbortError when a newer start replaces the source; not a failure.
-      if (err?.name === "AbortError") return
-      console.error("[Camera Access Error]", err)
+      if (stale() || err?.name === "AbortError") return
+      console.error("[Camera] start failed", err)
       setCameraError(
         err?.name === "NotAllowedError" || err?.name === "SecurityError"
-          ? "Camera permission denied. Please allow camera access in your browser settings."
+          ? "Camera access was denied. Allow it in your settings, then try again."
           : err?.name === "NotReadableError"
             ? "The camera is being used by another app. Close it and try again."
             : err?.name === "NotFoundError" || err?.name === "OverconstrainedError"
               ? "No usable camera was found on this device."
-              : "Unable to start camera. Please ensure camera hardware is connected.",
+              : "The camera couldn't start. Try again.",
       )
       setCameraActive(false)
     }
   }, [])
 
-  // Toggle Torch / Flashlight on mobile devices
-  const toggleTorch = async () => {
-    const track = streamRef.current?.getVideoTracks()[0]
-    if (!track) return
-    try {
-      const nextState = !torchEnabled
-      await track.applyConstraints({ advanced: [{ torch: nextState } as any] })
-      setTorchEnabled(nextState)
-    } catch (e) {
-      console.warn("Torch constraint not supported on this device", e)
-    }
-  }
-
-  // Lifecycle: start camera + worker on mount, always release the camera on unmount
   useEffect(() => {
     mountedRef.current = true
     startCamera()
@@ -228,8 +232,7 @@ export default function ScanPage() {
     }
   }, [startCamera, stopCamera])
 
-  // Release the camera while the app is in the background (saves battery, lets
-  // other apps use it, and avoids a frozen preview on resume), then reopen it.
+  // Release the camera in the background; reopen on return (only on the camera screen).
   useEffect(() => {
     const onVisibility = () => {
       if (document.visibilityState === "hidden") stopCamera()
@@ -239,17 +242,230 @@ export default function ScanPage() {
     return () => document.removeEventListener("visibilitychange", onVisibility)
   }, [startCamera, stopCamera])
 
-  // Auto-dismiss transient notices.
+  const toggleTorch = async () => {
+    const track = streamRef.current?.getVideoTracks()[0]
+    if (!track) return
+    try {
+      const next = !torchEnabled
+      await track.applyConstraints({ advanced: [{ torch: next } as any] })
+      setTorchEnabled(next)
+    } catch (e) {
+      console.warn("[Camera] torch not supported", e)
+    }
+  }
+
   useEffect(() => {
     if (!notice) return
     const t = setTimeout(() => setNotice(null), 4000)
     return () => clearTimeout(t)
   }, [notice])
 
-  /**
-   * Grab the current video frame at full resolution and JPEG-encode it.
-   * Returns null if a previous capture is still encoding or the video isn't ready.
-   */
+  // Release the captured photo / review bitmap if the screen unmounts mid-flow.
+  useEffect(
+    () => () => {
+      if (cropSrcRef.current) URL.revokeObjectURL(cropSrcRef.current)
+      reviewPageRef.current?.close()
+    },
+    [],
+  )
+
+  /* ------------------------------------------------------------------ */
+  /* Detection loop + outline renderer                                   */
+  /* ------------------------------------------------------------------ */
+
+  const resetDetection = useCallback(() => {
+    targetRef.current = null
+    anchorRef.current = null
+    steadySinceRef.current = 0
+    missesRef.current = 0
+    setDetected(false)
+    setSteady(false)
+  }, [])
+
+  const handleShutterRef = useRef<() => void>(() => {})
+
+  const onDetection = useCallback((corners: Point[] | null, now: number) => {
+    const { w, h } = videoSizeRef.current
+    const longSide = Math.max(w, h) || 1
+
+    if (!corners) {
+      if (++missesRef.current < LOST_AFTER_MISSES) return
+      targetRef.current = null
+      anchorRef.current = null
+      steadySinceRef.current = 0
+      autoArmedRef.current = true // page removed: next one may auto-capture
+      autoCapturedAtRef.current = null
+      setDetected(false)
+      setSteady(false)
+      return
+    }
+
+    missesRef.current = 0
+    targetRef.current = corners
+    if (!anchorRef.current || maxCornerShift(anchorRef.current, corners) > longSide * STEADY_TOLERANCE) {
+      anchorRef.current = corners
+      steadySinceRef.current = now
+    }
+    if (autoCapturedAtRef.current && maxCornerShift(autoCapturedAtRef.current, corners) > longSide * REARM_MOVE) {
+      autoArmedRef.current = true
+      autoCapturedAtRef.current = null
+    }
+    const heldFor = now - steadySinceRef.current
+    setDetected(true)
+    setSteady(heldFor > 300)
+
+    const s = settingsRef.current
+    if (s.autoCapture && autoArmedRef.current && heldFor >= STEADY_MS) {
+      autoArmedRef.current = false
+      autoCapturedAtRef.current = corners
+      handleShutterRef.current()
+    }
+  }, [])
+
+  // Detection: back-to-back passes on a GPU-downscaled frame, at most every 100ms.
+  useEffect(() => {
+    if (!cameraActive || detectionPaused) {
+      resetDetection()
+      return
+    }
+    let stopped = false
+    ;(async () => {
+      while (!stopped) {
+        const started = performance.now()
+        const video = videoRef.current
+        if (video && video.readyState >= 2 && video.videoWidth > 0) {
+          const vw = video.videoWidth
+          const vh = video.videoHeight
+          videoSizeRef.current = { w: vw, h: vh }
+          try {
+            const s = Math.min(1, DETECT_MAX_SIDE / Math.max(vw, vh))
+            const frame = await createImageBitmap(video, {
+              resizeWidth: Math.round(vw * s),
+              resizeHeight: Math.round(vh * s),
+              resizeQuality: "low",
+            })
+            // Some engines ignore resize options; derive the real scale from the result.
+            const scale = frame.width / vw
+            const corners = await documentProcessor.detectCorners(frame)
+            if (stopped) break
+            onDetection(corners?.map((p) => ({ x: p.x / scale, y: p.y / scale })) ?? null, performance.now())
+          } catch (err) {
+            if (!stopped) console.warn("[Detect] pass failed", err)
+            await sleep(400)
+          }
+        }
+        await sleep(Math.max(0, DETECT_MIN_INTERVAL_MS - (performance.now() - started)))
+      }
+    })()
+    return () => {
+      stopped = true
+    }
+  }, [cameraActive, detectionPaused, onDetection, resetDetection])
+
+  // Outline renderer: eases toward the latest detection every frame, so the
+  // outline glides instead of jumping between detections.
+  useEffect(() => {
+    if (screen !== "camera") return
+    const canvas = overlayRef.current
+    const box = previewRef.current
+    const ctx = canvas?.getContext("2d")
+    if (!canvas || !box || !ctx) return
+
+    let cssW = 0
+    let cssH = 0
+    let dpr = 1
+    const resize = () => {
+      const r = box.getBoundingClientRect()
+      dpr = window.devicePixelRatio || 1
+      cssW = r.width
+      cssH = r.height
+      canvas.width = Math.round(cssW * dpr)
+      canvas.height = Math.round(cssH * dpr)
+    }
+    resize()
+    const ro = new ResizeObserver(resize)
+    ro.observe(box)
+
+    let shown: Point[] | null = null
+    let alpha = 0
+    let drewEmpty = false
+    let raf = 0
+    const ringLen = 2 * Math.PI * 38
+
+    const frame = () => {
+      raf = requestAnimationFrame(frame)
+      const target = targetRef.current
+      alpha = Math.max(0, Math.min(1, alpha + (target ? 0.2 : -0.12)))
+      if (target) {
+        shown = shown ? shown.map((p, i) => ({ x: p.x + (target[i].x - p.x) * OUTLINE_EASE, y: p.y + (target[i].y - p.y) * OUTLINE_EASE })) : target
+      }
+
+      // Auto-capture progress ring around the shutter.
+      const ring = progressRef.current
+      if (ring) {
+        const s = settingsRef.current
+        const p =
+          s.autoCapture && target && autoArmedRef.current && steadySinceRef.current
+            ? Math.min(1, (performance.now() - steadySinceRef.current) / STEADY_MS)
+            : 0
+        ring.style.strokeDashoffset = String(ringLen * (1 - p))
+      }
+
+      if (alpha === 0 || !shown) {
+        if (!drewEmpty) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0)
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+          drewEmpty = true
+        }
+        if (alpha === 0) shown = null
+        return
+      }
+      drewEmpty = false
+
+      const { w: vw, h: vh } = videoSizeRef.current
+      if (!vw || !vh) return
+      // object-contain mapping: video pixels -> preview box (letterboxed).
+      const scale = Math.min(cssW / vw, cssH / vh)
+      const ox = (cssW - vw * scale) / 2
+      const oy = (cssH - vh * scale) / 2
+      const pts = shown.map((p) => ({ x: ox + p.x * scale, y: oy + p.y * scale }))
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.clearRect(0, 0, cssW, cssH)
+      ctx.globalAlpha = alpha
+      ctx.beginPath()
+      ctx.moveTo(pts[0].x, pts[0].y)
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y)
+      ctx.closePath()
+      ctx.fillStyle = "rgba(59,130,246,0.16)"
+      ctx.fill()
+      ctx.lineWidth = 3
+      ctx.lineJoin = "round"
+      ctx.strokeStyle = ACCENT
+      ctx.stroke()
+      for (const p of pts) {
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2)
+        ctx.fillStyle = "#fff"
+        ctx.fill()
+        ctx.lineWidth = 2.5
+        ctx.strokeStyle = ACCENT
+        ctx.stroke()
+      }
+      ctx.globalAlpha = 1
+    }
+    raf = requestAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [screen])
+
+  /* ------------------------------------------------------------------ */
+  /* Capture                                                             */
+  /* ------------------------------------------------------------------ */
+
+  /** Grab the current frame at full resolution and JPEG-encode it. */
   const captureFrame = async (): Promise<{ blob: Blob; corners: Point[] | null } | null> => {
     const video = videoRef.current
     if (!video || video.readyState < 2 || video.videoWidth === 0 || capturingRef.current) return null
@@ -259,17 +475,11 @@ export default function ScanPage() {
       if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth
       if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight
       const ctx = canvas.getContext("2d")
-      if (!ctx) throw new Error("Could not create capture canvas 2D context")
+      if (!ctx) throw new Error("Could not create capture canvas")
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-      // Corners are in video pixel space, which matches the captured frame.
-      const corners = lastCornersRef.current
+      const corners = targetRef.current
       const blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("Frame encode failed"))),
-          "image/jpeg",
-          RAW_FRAME_JPEG_QUALITY,
-        ),
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Frame encode failed"))), "image/jpeg", RAW_FRAME_JPEG_QUALITY),
       )
       return { blob, corners }
     } finally {
@@ -278,36 +488,37 @@ export default function ScanPage() {
   }
 
   const playCaptureFeedback = () => {
-    flashRef.current?.animate([{ opacity: 0.85 }, { opacity: 0 }], { duration: 260, easing: "ease-out" })
-    badgeRef.current?.animate(
-      [{ transform: "scale(1)" }, { transform: "scale(1.18)" }, { transform: "scale(1)" }],
-      { duration: 300, easing: "ease-out" },
-    )
-    navigator.vibrate?.(15)
+    flashRef.current?.animate([{ opacity: 0.7 }, { opacity: 0 }], { duration: 220, easing: "ease-out" })
+    shutterRef.current?.animate([{ transform: "scale(1)" }, { transform: "scale(0.9)" }, { transform: "scale(1)" }], {
+      duration: 180,
+      easing: "ease-out",
+    })
+    thumbRef.current?.animate([{ transform: "scale(1)" }, { transform: "scale(1.15)" }, { transform: "scale(1)" }], {
+      duration: 280,
+      easing: "ease-out",
+    })
+    navigator.vibrate?.(12)
   }
 
-  /** Batch: enqueue dewarp + filter + IndexedDB write; never blocks the shutter. */
-  const enqueueBatchPage = (raw: Blob, corners: Point[] | null, filter: FilterMode) => {
+  /** Batch: dewarp + filter + store in the background; never blocks the shutter. */
+  const enqueueBatchPage = (raw: Blob, corners: Point[] | null, pageFilter: ScanFilter) => {
     setPendingCount((n) => n + 1)
-    // Every step is caught: a rejected link would silently skip all later pages
-    // in the chain and leave "Next" waiting on a failed promise.
+    // Every step is caught: a rejected link would skip all later pages.
     queueRef.current = queueRef.current.then(async () => {
       let bitmap: ImageBitmap | null = null
       try {
         try {
-          // Detect on the full-resolution capture; the live-preview corners are
-          // only a fallback because they can lag the shutter by up to ~500ms.
+          // Re-detect on the full-resolution frame; live corners are only a fallback.
           const result = await documentProcessor.processFull(
             raw,
             undefined,
-            filter,
+            pageFilter,
             MAGIC_COLOR_OPTIONS,
             BW_OPTIONS,
             corners ?? undefined,
           )
           bitmap = result.bitmap
         } catch (err) {
-          // Keep the page rather than lose it; it can still be exported as-is.
           console.warn("[Batch] processing failed, saving raw frame", err)
           bitmap = await createImageBitmap(raw)
         }
@@ -322,484 +533,353 @@ export default function ScanPage() {
     })
   }
 
-  const cropSrcRef = useRef<string | null>(null)
-  cropSrcRef.current = cropSrc
-
-  // Release the captured photo's object URL if the page unmounts mid-crop.
-  useEffect(
-    () => () => {
-      if (cropSrcRef.current) URL.revokeObjectURL(cropSrcRef.current)
-    },
-    [],
-  )
-
-  /** Single: hand the frame to the crop screen. */
   const openCrop = (raw: Blob, corners: Point[] | null) => {
     const url = URL.createObjectURL(raw)
     cropSrcRef.current = url
     setCropSrc(url)
     setCropCorners(corners)
     setScreen("crop")
-    // Refine on the captured photo itself; the preview corners may be stale.
+    // Refine on the captured photo itself; preview corners can lag the shutter.
     documentProcessor
       .detectCorners(raw)
-      .then((detected) => {
-        if (!detected || detected.length !== 4 || cropSrcRef.current !== url) return
-        setCropCorners(detected)
+      .then((found) => {
+        if (found?.length === 4 && cropSrcRef.current === url) setCropCorners(found)
       })
       .catch((err) => console.warn("[Crop] detection on captured frame failed", err))
   }
 
   const handleShutter = async () => {
-    if (screen !== "camera") return
-    const { mode: currentMode, filterMode: currentFilter } = settingsRef.current
+    if (screen !== "camera" || finishing) return
+    const { mode: currentMode, filter: currentFilter } = settingsRef.current
     try {
       const frame = await captureFrame()
       if (!frame) return
-      steadyCountRef.current = 0
-      if (currentMode === "batch") {
-        playCaptureFeedback()
-        enqueueBatchPage(frame.blob, frame.corners, currentFilter)
-      } else {
-        openCrop(frame.blob, frame.corners)
-      }
+      playCaptureFeedback()
+      steadySinceRef.current = performance.now()
+      if (currentMode === "batch") enqueueBatchPage(frame.blob, frame.corners, currentFilter)
+      else openCrop(frame.blob, frame.corners)
     } catch (err) {
-      console.error("[Capture Error]", err)
+      console.error("[Capture] failed", err)
+      setNotice("Couldn't take the photo. Try again.")
     }
   }
-  const handleShutterRef = useRef(handleShutter)
   handleShutterRef.current = handleShutter
 
-  const closeCrop = () => {
-    if (cropSrc) URL.revokeObjectURL(cropSrc)
+  /* ------------------------------------------------------------------ */
+  /* Single-page flow: crop -> review -> save                            */
+  /* ------------------------------------------------------------------ */
+
+  const closeFlow = () => {
+    if (cropSrcRef.current) URL.revokeObjectURL(cropSrcRef.current)
     cropSrcRef.current = null
     setCropSrc(null)
     setCropCorners(null)
+    reviewPageRef.current?.close()
+    setReviewPage(null)
     setScreen("camera")
   }
 
-  /** Single-mode crop confirmed: filter, persist, and go to export. Takes ownership of `page`. */
-  const handleCropComplete = async (page: ImageBitmap) => {
-    setScreen("saving")
-    let bitmap: ImageBitmap | null = page
+  const handleCropComplete = (page: ImageBitmap, corners: Point[]) => {
+    // Remember the user's corners so "back to crop" restores them.
+    setCropCorners(corners)
+    reviewPageRef.current?.close()
+    setReviewPage(page)
+    setScreen("review")
+  }
+
+  const backToCrop = () => {
+    reviewPageRef.current?.close()
+    setReviewPage(null)
+    setScreen("crop")
+  }
+
+  /** Move a capture session into the library (new document or the one being extended) and open it. */
+  const saveSessionToLibrary = async (sessionId: string, source: typeof batch) => {
+    let docId = targetDocId
+    if (docId) await appendSessionToDocument(sessionId, docId)
+    else docId = (await createDocumentFromSession(sessionId)).id
+    source.forget()
+    router.replace(`/doc?id=${encodeURIComponent(docId)}`)
+  }
+
+  const handleReviewSave = async (chosen: ScanFilter) => {
+    const page = reviewPageRef.current
+    if (!page || saving) return
+    setSaving(true)
+    let out: ImageBitmap | null = null
     try {
-      bitmap = await applyFilter(page, settingsRef.current.filterMode)
+      try {
+        out = await renderFiltered(page, chosen)
+      } catch (err) {
+        console.warn("[Save] filter failed, saving unfiltered", err)
+        out = await createImageBitmap(page)
+      }
       await single.clear()
-      await single.addFromBitmap(bitmap)
-      closeCrop()
-      setExportTarget("single")
+      await single.addFromBitmap(out)
+      await saveSessionToLibrary("single", single)
     } catch (err) {
-      console.error("[Single Save Error]", err)
-      // Stay on the crop screen so the user can retry instead of losing the shot.
-      setScreen("crop")
+      console.error("[Save] failed", err)
       setNotice("Couldn't save this page. Check free storage and try again.")
+      setSaving(false)
     } finally {
-      bitmap?.close()
+      out?.close()
     }
   }
 
-  /** Batch finish: wait for queued pages to land in IndexedDB, then export. */
+  /* ------------------------------------------------------------------ */
+  /* Batch finish                                                        */
+  /* ------------------------------------------------------------------ */
+
   const handleBatchFinish = async () => {
     setFinishing(true)
     try {
       await queueRef.current.catch(() => {})
-      setExportTarget("batch")
-    } finally {
+      await saveSessionToLibrary("current", batch)
+    } catch (err) {
+      console.error("[Batch] save failed", err)
+      setNotice("Couldn't save these pages. Check free storage and try again.")
       setFinishing(false)
     }
   }
 
-  /**
-   * Continuous 500ms polling detection loop.
-   * Samples a scaled low-resolution frame (max 640px) to feed the Web Worker.
-   */
-  useEffect(() => {
-    if (!cameraActive || detectionPaused) {
-      // Don't leave a stale outline (or a primed auto-capture) behind.
-      setDetectedCorners(null)
-      lastCornersRef.current = null
-      steadyCountRef.current = 0
-      return
-    }
-
-    let busy = false
-    let stopped = false
-    const interval = setInterval(async () => {
-      const video = videoRef.current
-      if (busy || stopped || !video || video.readyState < 2 || video.videoWidth === 0) return
-      busy = true
-      try {
-        const canvas = sampleCanvasRef.current ?? (sampleCanvasRef.current = document.createElement("canvas"))
-        const scale = Math.min(640 / video.videoWidth, 1.0)
-        canvas.width = Math.round(video.videoWidth * scale)
-        canvas.height = Math.round(video.videoHeight * scale)
-        const ctx = canvas.getContext("2d", { willReadFrequently: true })
-        if (!ctx) return
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        const sampleBitmap = await createImageBitmap(canvas)
-
-        const corners = await documentProcessor.detectCorners(sampleBitmap, {
-          blurKernelSize: 5,
-          cannyThreshold1: 30,
-          cannyThreshold2: 150,
-          epsilonFactor: 0.02,
-        })
-        if (stopped) return
-
-        if (corners && corners.length === 4) {
-          // Rescale corners back to video stream native coordinate space
-          const fullCorners: Point[] = corners.map((p) => ({ x: p.x / scale, y: p.y / scale }))
-          const tolerance = Math.max(video.videoWidth, video.videoHeight) * STEADY_TOLERANCE
-          // Only count frames where the page hasn't moved; otherwise auto-capture
-          // fires mid-motion and produces blurry, mis-cropped pages.
-          steadyCountRef.current = cornersSteady(lastCornersRef.current, fullCorners, tolerance)
-            ? steadyCountRef.current + 1
-            : 1
-          setDetectedCorners(fullCorners)
-          lastCornersRef.current = fullCorners
-
-          if (
-            settingsRef.current.autoCapture &&
-            autoArmedRef.current &&
-            steadyCountRef.current >= AUTO_CAPTURE_STEADY_FRAMES
-          ) {
-            autoArmedRef.current = false
-            handleShutterRef.current()
-          }
-        } else {
-          setDetectedCorners(null)
-          lastCornersRef.current = null
-          steadyCountRef.current = 0
-          autoArmedRef.current = true // page removed/changed: allow next auto-capture
-        }
-      } catch (err) {
-        console.error("[Corner Detection Loop Error]", err)
-      } finally {
-        busy = false
-      }
-    }, 500)
-
-    return () => {
-      stopped = true
-      clearInterval(interval)
-    }
-  }, [cameraActive, detectionPaused])
-
-  /**
-   * Draw the dynamic real-time polygon overlay matched to the viewport video display.
-   */
-  const [viewport, setViewport] = useState(0)
-  useEffect(() => {
-    const onResize = () => setViewport((n) => n + 1)
-    window.addEventListener("resize", onResize)
-    return () => window.removeEventListener("resize", onResize)
-  }, [])
-
-  useEffect(() => {
-    const canvas = overlayCanvasRef.current
-    const video = videoRef.current
-    if (!canvas || !video) return
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    // Back the canvas at device resolution so the outline is crisp on phones.
-    const rect = canvas.getBoundingClientRect()
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.round(rect.width * dpr)
-    canvas.height = Math.round(rect.height * dpr)
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, rect.width, rect.height)
-
-    if (!detectedCorners || detectedCorners.length !== 4 || detectionPaused) return
-
-    // object-fit: cover mapping from video pixels to viewport (CSS) pixels
-    const videoW = video.videoWidth || 1920
-    const videoH = video.videoHeight || 1080
-    const scale = Math.max(rect.width / videoW, rect.height / videoH)
-    const offsetX = (rect.width - videoW * scale) / 2
-    const offsetY = (rect.height - videoH * scale) / 2
-    const viewPoints = detectedCorners.map((p) => ({ x: p.x * scale + offsetX, y: p.y * scale + offsetY }))
-
-    ctx.save()
-    ctx.beginPath()
-    ctx.moveTo(viewPoints[0].x, viewPoints[0].y)
-    for (let i = 1; i < 4; i++) ctx.lineTo(viewPoints[i].x, viewPoints[i].y)
-    ctx.closePath()
-    ctx.fillStyle = "rgba(45, 212, 191, 0.18)"
-    ctx.fill()
-    ctx.lineWidth = 3
-    ctx.strokeStyle = "#2dd4bf"
-    ctx.shadowColor = "#14b8a6"
-    ctx.shadowBlur = 12
-    ctx.stroke()
-
-    viewPoints.forEach((pt) => {
-      ctx.beginPath()
-      ctx.arc(pt.x, pt.y, 7, 0, Math.PI * 2)
-      ctx.fillStyle = "#ffffff"
-      ctx.shadowColor = "#2dd4bf"
-      ctx.shadowBlur = 8
-      ctx.fill()
-      ctx.lineWidth = 2
-      ctx.strokeStyle = "#0d9488"
-      ctx.stroke()
-    })
-    ctx.restore()
-  }, [detectedCorners, detectionPaused, viewport])
+  /* ------------------------------------------------------------------ */
+  /* UI                                                                  */
+  /* ------------------------------------------------------------------ */
 
   const batchCount = batch.pages.length + pendingCount
   const batchPreview = batch.pages.at(-1)?.thumbUrl ?? null
-  const exportBatch = exportTarget === "single" ? single : batch
+
+  const hint = !cameraActive
+    ? "Starting camera…"
+    : finishing
+      ? "Saving pages…"
+      : !detected
+        ? "Point the camera at a document"
+        : autoCapture
+          ? steady
+            ? "Hold still…"
+            : "Hold steady to capture"
+          : "Tap to capture"
 
   return (
-    <main className="relative h-dvh w-full overflow-hidden bg-black text-white select-none">
-      {/* Full-screen live viewfinder */}
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        autoPlay
-        className="absolute inset-0 h-full w-full object-cover"
-      />
-      <canvas ref={overlayCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
-
-      {/* Capture flash (animated via WAAPI on each batch shot) */}
-      <div ref={flashRef} className="pointer-events-none absolute inset-0 z-30 bg-white opacity-0" />
-
-      {cameraError ? (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black p-6 text-center">
-          <Camera className="mb-4 size-12 animate-pulse text-rose-500" />
-          <p className="mb-4 max-w-xs text-sm font-medium text-white">{cameraError}</p>
-          <Button onClick={startCamera} variant="secondary" className="rounded-full">
-            <RefreshCw className="mr-2 size-4" /> Try Again
-          </Button>
-        </div>
-      ) : null}
-
-      {/* Top Control Bar */}
+    <main className="fixed inset-0 flex select-none flex-col bg-black text-white">
+      {/* Top bar */}
       <header
-        className="absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/75 via-black/30 to-transparent px-4 pb-6"
-        style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
+        className="relative z-10 flex shrink-0 items-center justify-between px-2 pb-2"
+        style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
       >
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-10 rounded-full bg-black/40 text-white backdrop-blur-md hover:bg-black/60"
-          aria-label="Back"
-          nativeButton={false}
-          render={
-            <Link href="/">
-              <ArrowLeft className="size-5" />
-            </Link>
-          }
-        />
+        <Link
+          href={returnHref}
+          aria-label="Close camera"
+          className="flex size-11 items-center justify-center rounded-full active:bg-white/10"
+        >
+          <X className="size-6" />
+        </Link>
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center rounded-full border border-white/10 bg-black/50 p-1 text-xs font-medium backdrop-blur-md">
-            {(
-              [
-                ["magic-color", "Magic Color"],
-                ["bw", "B&W"],
-                ["none", "Original"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setFilterMode(value)}
-                aria-pressed={filterMode === value}
-                className={cn(
-                  "rounded-full px-3 py-1 transition-all",
-                  filterMode === value
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-white/70 hover:text-white",
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {hasTorch && (
-            <Button
-              variant="ghost"
-              size="icon"
+        <div className="flex items-center gap-1">
+          {mode === "batch" ? (
+            <button
+              type="button"
+              onClick={() => setFilter((f) => FILTER_CYCLE[(FILTER_CYCLE.indexOf(f) + 1) % FILTER_CYCLE.length])}
+              aria-label={`Filter: ${FILTER_LABELS[filter]}. Tap to change.`}
+              className="flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-3 text-xs font-semibold active:bg-white/20"
+            >
+              <Sparkles className="size-3.5" />
+              {FILTER_LABELS[filter]}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setAutoCapture((v) => !v)}
+            aria-pressed={autoCapture}
+            className={cn(
+              "flex h-9 items-center rounded-full px-3 text-xs font-semibold transition-colors",
+              autoCapture ? "bg-primary text-primary-foreground" : "bg-white/10 text-white active:bg-white/20",
+            )}
+          >
+            Auto
+          </button>
+          {hasTorch ? (
+            <button
+              type="button"
               onClick={toggleTorch}
-              aria-label={torchEnabled ? "Turn torch off" : "Turn torch on"}
+              aria-label={torchEnabled ? "Turn flash off" : "Turn flash on"}
+              aria-pressed={torchEnabled}
               className={cn(
-                "size-10 rounded-full bg-black/40 backdrop-blur-md hover:bg-black/60",
-                torchEnabled ? "text-amber-400" : "text-white",
+                "flex size-11 items-center justify-center rounded-full active:bg-white/10",
+                torchEnabled && "text-amber-300",
               )}
             >
-              {torchEnabled ? <Zap className="size-5" /> : <ZapOff className="size-5" />}
-            </Button>
-          )}
+              {torchEnabled ? <Zap className="size-5" fill="currentColor" /> : <ZapOff className="size-5" />}
+            </button>
+          ) : null}
         </div>
       </header>
 
-      {/* Live Detection Guidance Badge */}
-      <div className="pointer-events-none absolute inset-x-0 top-24 z-10 flex justify-center">
-        <div
-          className={cn(
-            "flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold backdrop-blur-md transition-all",
-            detectedCorners
-              ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-300 shadow-lg shadow-emerald-500/10"
-              : "border-white/10 bg-black/40 text-white/70",
-          )}
-        >
-          <Sparkles className="size-3.5" />
-          {detectedCorners ? "Document Detected" : "Align Document in Frame"}
-        </div>
+      {/* Viewfinder: the whole camera frame is visible (no zoom-to-fill crop), so what you see is what you get. */}
+      <div ref={previewRef} className="relative min-h-0 flex-1 overflow-hidden">
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className={cn("absolute inset-0 h-full w-full object-contain transition-opacity duration-300", cameraActive ? "opacity-100" : "opacity-0")}
+        />
+        <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+        <div ref={flashRef} className="pointer-events-none absolute inset-0 bg-white opacity-0" />
+
+        {!cameraActive && !cameraError ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Loader2 className="size-7 animate-spin text-white/50" />
+          </div>
+        ) : null}
+
+        {cameraError ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
+            <span className="flex size-14 items-center justify-center rounded-full bg-white/10">
+              <Camera className="size-7 text-white/80" />
+            </span>
+            <p className="max-w-xs text-sm text-white/85">{cameraError}</p>
+            <button
+              type="button"
+              onClick={startCamera}
+              className="flex h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black active:opacity-90"
+            >
+              <RefreshCw className="size-4" />
+              Try again
+            </button>
+          </div>
+        ) : null}
+
       </div>
 
-      {/* Bottom controls, layered over the video */}
-      <div
-        className="absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-4 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-6 pt-10"
-        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
-      >
-        <div className="flex items-center gap-2">
-          {/* Single / Batch mode toggle */}
-          <div
-            role="radiogroup"
-            aria-label="Scan mode"
-            className="flex items-center rounded-full border border-white/15 bg-black/50 p-1 text-xs font-semibold backdrop-blur-md"
-          >
-            {(["single", "batch"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={mode === value}
-                onClick={() => setMode(value)}
-                className={cn(
-                  "rounded-full px-4 py-1.5 capitalize transition-all",
-                  mode === value ? "bg-white text-black shadow-sm" : "text-white/70 hover:text-white",
-                )}
-              >
-                {value}
-              </button>
-            ))}
-          </div>
+      {/* Controls */}
+      <div className="shrink-0 px-5 pt-3" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+        <p aria-live="polite" className="mb-3 h-5 text-center text-[13px] font-medium text-white/80">
+          {hint}
+        </p>
 
-          {/* Auto-capture toggle */}
-          <button
-            type="button"
-            onClick={() => setAutoCapture((prev) => !prev)}
-            aria-pressed={autoCapture}
-            className={cn(
-              "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold backdrop-blur-md transition-all",
-              autoCapture
-                ? "border-primary bg-primary text-primary-foreground shadow-md shadow-primary/20"
-                : "border-white/15 bg-black/50 text-white/80 hover:bg-black/70",
-            )}
-          >
-            <span className={cn("size-2 rounded-full", autoCapture ? "animate-pulse bg-white" : "bg-white/40")} />
-            Auto
-          </button>
+        <div role="radiogroup" aria-label="Scan mode" className="mb-4 flex justify-center gap-6">
+          {(["single", "batch"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={mode === value}
+              onClick={() => setMode(value)}
+              disabled={mode === "batch" && batchCount > 0 && value === "single"}
+              className={cn(
+                "relative pb-1.5 text-xs font-bold uppercase tracking-[0.12em] transition-colors disabled:opacity-30",
+                mode === value ? "text-white" : "text-white/45",
+              )}
+            >
+              {value}
+              <span
+                className={cn(
+                  "absolute inset-x-0 -bottom-0.5 mx-auto size-1 rounded-full bg-primary transition-opacity",
+                  mode === value ? "opacity-100" : "opacity-0",
+                )}
+              />
+            </button>
+          ))}
         </div>
 
-        <div className="grid w-full max-w-sm grid-cols-3 items-center">
-          {/* Left: batch thumbnail + counter badge */}
+        <div className="mx-auto grid max-w-sm grid-cols-3 items-center">
+          {/* Left: batch tray */}
           <div className="flex justify-start">
             {mode === "batch" && batchCount > 0 ? (
-              <div ref={badgeRef} className="relative size-14">
-                <div className="size-full overflow-hidden rounded-xl border-2 border-white/40 bg-white/10 shadow-md">
+              <div ref={thumbRef} className="relative size-14">
+                <div className="size-full overflow-hidden rounded-lg border-2 border-white/80 bg-white/10">
                   {batchPreview ? (
-                    <img src={batchPreview} alt="Last scanned page" className="size-full object-cover" />
+                    <img src={batchPreview} alt="Last page" className="size-full object-cover" />
                   ) : (
                     <div className="flex size-full items-center justify-center">
                       <Loader2 className="size-5 animate-spin text-white/70" />
                     </div>
                   )}
                 </div>
-                <span className="absolute -right-2 -top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-bold tabular-nums text-primary-foreground shadow">
+                <span className="absolute -right-2 -top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-bold tabular-nums text-primary-foreground">
                   {batchCount}
                 </span>
                 {pendingCount > 0 ? (
-                  <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-1.5 text-[10px] font-medium text-white/80">
-                    saving
-                  </span>
+                  <Loader2 className="absolute -bottom-1.5 -right-1.5 size-4 animate-spin rounded-full bg-black text-white" />
                 ) : null}
               </div>
             ) : null}
           </div>
 
-          {/* Center: shutter */}
+          {/* Center: shutter with auto-capture progress ring */}
           <div className="flex justify-center">
             <button
+              ref={shutterRef}
               type="button"
-              disabled={!cameraActive || screen !== "camera"}
+              disabled={!cameraActive || screen !== "camera" || finishing}
               onClick={handleShutter}
-              className="group relative flex size-20 items-center justify-center rounded-full border-4 border-white/85 p-1 shadow-2xl backdrop-blur-md transition-transform active:scale-95 disabled:pointer-events-none disabled:opacity-50"
               aria-label={mode === "batch" ? "Capture page" : "Capture document"}
+              className="relative flex size-[84px] items-center justify-center disabled:opacity-40"
             >
+              <svg viewBox="0 0 84 84" className="absolute inset-0 -rotate-90">
+                <circle cx="42" cy="42" r="38" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="4" />
+                <circle
+                  ref={progressRef}
+                  cx="42"
+                  cy="42"
+                  r="38"
+                  fill="none"
+                  stroke={ACCENT}
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                  strokeDasharray={2 * Math.PI * 38}
+                  strokeDashoffset={2 * Math.PI * 38}
+                />
+              </svg>
               <span
                 className={cn(
-                  "size-full rounded-full transition-all duration-200 group-active:scale-90",
-                  detectedCorners ? "bg-primary shadow-lg shadow-primary/40" : "bg-white",
+                  "size-[66px] rounded-full transition-colors duration-200 active:scale-95",
+                  detected ? "bg-white" : "bg-white/85",
                 )}
               />
             </button>
           </div>
 
-          {/* Right: batch finish */}
+          {/* Right: finish batch */}
           <div className="flex justify-end">
             {mode === "batch" && batchCount > 0 ? (
-              <Button
+              <button
+                type="button"
                 onClick={handleBatchFinish}
                 disabled={finishing}
-                className="h-11 gap-1 rounded-full bg-emerald-500 px-4 font-semibold text-white shadow-xl shadow-emerald-500/30 hover:bg-emerald-600"
+                className="flex h-11 items-center gap-1.5 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground active:opacity-90 disabled:opacity-60"
               >
                 {finishing ? <Loader2 className="size-4 animate-spin" /> : null}
-                Next
-                {!finishing ? <ChevronRight className="size-4" /> : null}
-              </Button>
+                Save
+              </button>
             ) : null}
           </div>
         </div>
       </div>
 
-      {/* Single mode: crop screen */}
-      {screen !== "camera" && cropSrc ? (
-        <div className="absolute inset-0 z-40 bg-black">
-          <CropView
-            src={cropSrc}
-            initialCorners={cropCorners}
-            onCropComplete={handleCropComplete}
-            onCancel={closeCrop}
-          />
-          {screen === "saving" ? (
-            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/70 backdrop-blur-sm">
-              <Loader2 className="size-8 animate-spin text-primary" />
-              <p className="text-sm font-medium text-white/80">Enhancing page…</p>
-            </div>
-          ) : null}
+      {/* Single-page flow overlays */}
+      {screen === "crop" && cropSrc ? (
+        <div className="absolute inset-0 z-20">
+          <CropView src={cropSrc} initialCorners={cropCorners} onCropComplete={handleCropComplete} onCancel={closeFlow} />
+        </div>
+      ) : null}
+      {screen === "review" && reviewPage ? (
+        <div className="absolute inset-0 z-20">
+          <FilterReview page={reviewPage} initialFilter={filter} saving={saving} onBack={backToCrop} onSave={handleReviewSave} />
         </div>
       ) : null}
 
       {notice ? (
         <div
           role="alert"
-          className="pointer-events-none absolute inset-x-4 top-36 z-[60] mx-auto max-w-sm rounded-xl bg-rose-600/90 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg"
+          className="pointer-events-none absolute inset-x-4 z-30 mx-auto max-w-sm rounded-xl bg-rose-600 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg"
+          style={{ top: "calc(max(0.5rem, env(safe-area-inset-top)) + 3.5rem)" }}
         >
           {notice}
         </div>
       ) : null}
-
-      <PdfExportSheet
-        open={exportTarget !== null}
-        onClose={() => setExportTarget(null)}
-        pages={exportBatch.pages}
-        onReorder={exportBatch.reorder}
-        onRemove={exportBatch.remove}
-        onExported={(result) => {
-          // A delivered batch is finished: start the next scan with an empty
-          // tray instead of silently mixing old pages into the next document.
-          if (result !== "cancelled" && exportTarget === "batch") {
-            batch.clear().catch((err) => console.error("[Batch] clear after export failed", err))
-          }
-        }}
-      />
     </main>
   )
 }

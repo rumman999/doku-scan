@@ -1,478 +1,405 @@
 "use client"
 
-import React, { useRef, useState, useEffect, useCallback } from "react"
-import { Check, RotateCcw, Sparkles } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import React, { useCallback, useEffect, useRef, useState } from "react"
+import { ArrowRight, Loader2, Maximize, ScanLine, X } from "lucide-react"
 import { Point } from "@/lib/cv/document-processor"
 import { documentProcessor } from "@/lib/cv/processor-client"
+import { cn } from "@/lib/utils"
 
 interface CropViewProps {
   src: string
   initialCorners?: Point[] | null
-  /** Receives the dewarped page. Ownership passes to the caller, which must close() it. */
-  onCropComplete: (page: ImageBitmap) => void | Promise<void>
+  /** Receives the dewarped page (caller owns and must close() it) and the corners used. */
+  onCropComplete: (page: ImageBitmap, corners: Point[]) => void | Promise<void>
+  /** Discard this photo and go back to the camera. */
   onCancel?: () => void
 }
 
-export function CropView({
-  src,
-  initialCorners,
-  onCropComplete,
-  onCancel,
-}: CropViewProps) {
-  // DOM References
+/** Accent used inside SVG/canvas, matching the app's primary blue. */
+const ACCENT = "#3b82f6"
+const LOUPE_SIZE = 112
+/** Source pixels shown in the loupe (zoom = LOUPE_SIZE / LOUPE_SAMPLE). */
+const LOUPE_SAMPLE = 40
+
+/** Where the image is drawn inside the container, in container pixels. */
+interface Layout {
+  naturalWidth: number
+  naturalHeight: number
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+function fullFrame(w: number, h: number): Point[] {
+  return [
+    { x: 0, y: 0 },
+    { x: w, y: 0 },
+    { x: w, y: h },
+    { x: 0, y: h },
+  ]
+}
+
+function insetFrame(w: number, h: number, f = 0.08): Point[] {
+  return [
+    { x: w * f, y: h * f },
+    { x: w * (1 - f), y: h * f },
+    { x: w * (1 - f), y: h * (1 - f) },
+    { x: w * f, y: h * (1 - f) },
+  ]
+}
+
+/**
+ * Corner adjustment for a captured photo. Handles and outline are moved by
+ * direct DOM mutation (no React render per pointermove), so dragging stays
+ * at display frame rate on low-end phones.
+ */
+export function CropView({ src, initialCorners, onCropComplete, onCancel }: CropViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
-  const svgRef = useRef<SVGSVGElement | null>(null)
-  const polygonRef = useRef<SVGPolygonElement | null>(null)
-
-  // Direct DOM references for 4 handle elements to mutate styles at 60fps without React re-renders
+  const shadeRef = useRef<SVGPathElement | null>(null)
+  const outlineRef = useRef<SVGPolygonElement | null>(null)
   const handleRefs = useRef<(SVGGElement | null)[]>([null, null, null, null])
+  const loupeRef = useRef<HTMLDivElement | null>(null)
+  const loupeCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
-  // Magnifier Canvas Ref
-  const magnifierCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const magnifierContainerRef = useRef<HTMLDivElement | null>(null)
+  const layoutRef = useRef<Layout | null>(null)
+  /** Corners in natural image pixels, [TL, TR, BR, BL]. */
+  const cornersRef = useRef<Point[]>(fullFrame(1, 1))
+  const dragRef = useRef<{ index: number; pointerId: number; offsetX: number; offsetY: number } | null>(null)
+  /** Set once the user moves a handle; late auto-detection must not overwrite their work. */
+  const userEditedRef = useRef(false)
+  const busyRef = useRef(false)
 
-  // Natural image dimensions & Display scale factors
-  const imgDimensionsRef = useRef<{
-    naturalWidth: number
-    naturalHeight: number
-    displayWidth: number
-    displayHeight: number
-    offsetX: number
-    offsetY: number
-  }>({
-    naturalWidth: 0,
-    naturalHeight: 0,
-    displayWidth: 0,
-    displayHeight: 0,
-    offsetX: 0,
-    offsetY: 0,
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState<null | "detect" | "crop">(null)
+  const [error, setError] = useState<string | null>(null)
+  /** Whether the current corners came from detection (drives the Detect / Full page toggle). */
+  const [isFullPage, setIsFullPage] = useState(false)
+
+  const toScreen = (p: Point, l: Layout) => ({
+    x: l.left + (p.x / l.naturalWidth) * l.width,
+    y: l.top + (p.y / l.naturalHeight) * l.height,
   })
 
-  // Stored corner coordinates in natural image pixel space [TL, TR, BR, BL]
-  const cornersRef = useRef<Point[]>([
-    { x: 0, y: 0 },
-    { x: 0, y: 0 },
-    { x: 0, y: 0 },
-    { x: 0, y: 0 },
-  ])
-
-  // Active dragging state
-  const activeDragIndexRef = useRef<number | null>(null)
-  /** Set once the user moves a handle; auto-updates must not overwrite their work. */
-  const userEditedRef = useRef<boolean>(false)
-  const isWarpingRef = useRef<boolean>(false)
-  const [isProcessing, setIsProcessing] = useState<boolean>(false)
-  const [error, setError] = useState<string | null>(null)
-
-  /**
-   * Recalculates display bounds and maps natural image coordinates to SVG screen coordinates.
-   */
-  const updateLayoutMetrics = useCallback(() => {
-    const img = imgRef.current
-    const container = containerRef.current
-    if (!img || !container || img.naturalWidth === 0) return
-
-    const containerRect = container.getBoundingClientRect()
-    const nw = img.naturalWidth
-    const nh = img.naturalHeight
-
-    // Compute contained image layout dimensions
-    // The <img> uses max-w/max-h-full, so it shrinks to fit but never upscales.
-    const scale = Math.min(1, containerRect.width / nw, containerRect.height / nh)
-    const dw = nw * scale
-    const dh = nh * scale
-    const ox = (containerRect.width - dw) / 2
-    const oy = (containerRect.height - dh) / 2
-
-    imgDimensionsRef.current = {
-      naturalWidth: nw,
-      naturalHeight: nh,
-      displayWidth: dw,
-      displayHeight: dh,
-      offsetX: ox,
-      offsetY: oy,
-    }
-
-    renderSvgElements()
-  }, [])
-
-  /**
-   * Directly updates SVG polygon points and handle positions at 60fps without triggering React renders.
-   */
-  const renderSvgElements = useCallback(() => {
-    const { naturalWidth, naturalHeight, displayWidth, displayHeight, offsetX, offsetY } =
-      imgDimensionsRef.current
-    if (naturalWidth === 0 || displayWidth === 0) return
-
-    const scaleX = displayWidth / naturalWidth
-    const scaleY = displayHeight / naturalHeight
-
-    const screenPoints = cornersRef.current.map((c) => ({
-      x: c.x * scaleX + offsetX,
-      y: c.y * scaleY + offsetY,
-    }))
-
-    // Update SVG Polygon points attribute
-    if (polygonRef.current) {
-      polygonRef.current.setAttribute(
-        "points",
-        screenPoints.map((p) => `${p.x},${p.y}`).join(" ")
+  const render = useCallback(() => {
+    const l = layoutRef.current
+    if (!l) return
+    const pts = cornersRef.current.map((p) => toScreen(p, l))
+    const poly = pts.map((p) => `${p.x},${p.y}`).join(" ")
+    outlineRef.current?.setAttribute("points", poly)
+    const c = containerRef.current
+    if (shadeRef.current && c) {
+      const { width, height } = c.getBoundingClientRect()
+      // Even-odd fill: everything except the selected quad is dimmed.
+      shadeRef.current.setAttribute(
+        "d",
+        `M0 0H${width}V${height}H0Z M${pts.map((p) => `${p.x} ${p.y}`).join(" L")}Z`,
       )
     }
-
-    // Move handle SVG groups
-    screenPoints.forEach((p, idx) => {
-      const handle = handleRefs.current[idx]
-      if (handle) {
-        handle.setAttribute("transform", `translate(${p.x}, ${p.y})`)
-      }
-    })
+    pts.forEach((p, i) => handleRefs.current[i]?.setAttribute("transform", `translate(${p.x} ${p.y})`))
   }, [])
 
-  /**
-   * Initializes corners either from auto-detected points or fallback inset rectangle.
-   */
-  const initCorners = useCallback(() => {
+  /** Measure where the <img> actually landed (object-contain, padding) inside the container. */
+  const measure = useCallback(() => {
     const img = imgRef.current
-    if (!img || img.naturalWidth === 0) return
+    const c = containerRef.current
+    if (!img || !c || !img.naturalWidth) return
+    const cr = c.getBoundingClientRect()
+    const ir = img.getBoundingClientRect()
+    layoutRef.current = {
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight,
+      left: ir.left - cr.left,
+      top: ir.top - cr.top,
+      width: ir.width,
+      height: ir.height,
+    }
+    render()
+  }, [render])
 
-    const nw = img.naturalWidth
-    const nh = img.naturalHeight
+  const setCorners = useCallback(
+    (pts: Point[]) => {
+      cornersRef.current = pts.map((p) => ({ ...p }))
+      render()
+    },
+    [render],
+  )
 
-    if (initialCorners && initialCorners.length === 4) {
-      cornersRef.current = initialCorners.map((p) => ({
-        x: Math.max(0, Math.min(nw, p.x)),
-        y: Math.max(0, Math.min(nh, p.y)),
-      }))
+  const applyInitial = useCallback(() => {
+    const img = imgRef.current
+    if (!img?.naturalWidth) return
+    const w = img.naturalWidth
+    const h = img.naturalHeight
+    if (initialCorners?.length === 4) {
+      setCorners(initialCorners.map((p) => ({ x: Math.min(w, Math.max(0, p.x)), y: Math.min(h, Math.max(0, p.y)) })))
+      setIsFullPage(false)
     } else {
-      // 8% inset padding fallback
-      const padX = nw * 0.08
-      const padY = nh * 0.08
-      cornersRef.current = [
-        { x: padX, y: padY }, // Top-Left
-        { x: nw - padX, y: padY }, // Top-Right
-        { x: nw - padX, y: nh - padY }, // Bottom-Right
-        { x: padX, y: nh - padY }, // Bottom-Left
-      ]
+      setCorners(insetFrame(w, h))
+      setIsFullPage(false)
     }
+  }, [initialCorners, setCorners])
 
-    updateLayoutMetrics()
-  }, [initialCorners, updateLayoutMetrics])
-
-  /**
-   * Update magnifying loupe preview canvas.
-   * Magnifies a 60x60 pixel area around the current corner by 3.5x.
-   */
-  const updateMagnifier = useCallback((screenX: number, screenY: number, naturalPt: Point) => {
-    const magCanvas = magnifierCanvasRef.current
-    const magContainer = magnifierContainerRef.current
-    const img = imgRef.current
-    if (!magCanvas || !magContainer || !img) return
-
-    const ctx = magCanvas.getContext("2d")
-    if (!ctx) return
-
-    const magSize = 110
-    magCanvas.width = magSize
-    magCanvas.height = magSize
-
-    // Position magnifier 85px above the finger so it's not obscured
-    const magLeft = Math.max(10, Math.min(window.innerWidth - magSize - 10, screenX - magSize / 2))
-    const magTop = Math.max(10, screenY - magSize - 40)
-
-    magContainer.style.transform = `translate3d(${magLeft}px, ${magTop}px, 0)`
-    magContainer.style.opacity = "1"
-
-    // Clear
-    ctx.clearRect(0, 0, magSize, magSize)
-
-    // Draw magnified image slice (3.5x zoom)
-    const sampleBox = 36
-    ctx.drawImage(
-      img,
-      naturalPt.x - sampleBox / 2,
-      naturalPt.y - sampleBox / 2,
-      sampleBox,
-      sampleBox,
-      0,
-      0,
-      magSize,
-      magSize
-    )
-
-    // Draw crosshair reticle
-    ctx.save()
-    ctx.strokeStyle = "#2dd4bf"
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    // Horizontal line
-    ctx.moveTo(0, magSize / 2)
-    ctx.lineTo(magSize, magSize / 2)
-    // Vertical line
-    ctx.moveTo(magSize / 2, 0)
-    ctx.lineTo(magSize / 2, magSize)
-    ctx.stroke()
-
-    // Center targeting ring
-    ctx.beginPath()
-    ctx.arc(magSize / 2, magSize / 2, 6, 0, Math.PI * 2)
-    ctx.strokeStyle = "#ffffff"
-    ctx.lineWidth = 2
-    ctx.stroke()
-    ctx.restore()
-  }, [])
-
-  const hideMagnifier = useCallback(() => {
-    const magContainer = magnifierContainerRef.current
-    if (magContainer) {
-      magContainer.style.opacity = "0"
-    }
-  }, [])
-
-  // Touch and Pointer Event Listeners
-  const handlePointerDown = (index: number) => (e: React.PointerEvent) => {
-    e.stopPropagation()
-    e.preventDefault()
-    activeDragIndexRef.current = index
-    userEditedRef.current = true
-    setError(null)
-    ;(e.target as Element).setPointerCapture(e.pointerId)
-  }
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    const dragIdx = activeDragIndexRef.current
-    if (dragIdx === null) return
-
-    e.preventDefault()
-    const container = containerRef.current
-    if (!container) return
-
-    const containerRect = container.getBoundingClientRect()
-    const clientX = e.clientX
-    const clientY = e.clientY
-
-    const { naturalWidth, naturalHeight, displayWidth, displayHeight, offsetX, offsetY } =
-      imgDimensionsRef.current
-    if (naturalWidth === 0 || displayWidth === 0) return
-
-    // Calculate position within image bounds
-    const screenX = clientX - containerRect.left
-    const screenY = clientY - containerRect.top
-
-    const localX = Math.max(0, Math.min(displayWidth, screenX - offsetX))
-    const localY = Math.max(0, Math.min(displayHeight, screenY - offsetY))
-
-    // Convert to natural image coordinate space
-    const natX = Math.round((localX / displayWidth) * naturalWidth)
-    const natY = Math.round((localY / displayHeight) * naturalHeight)
-
-    cornersRef.current[dragIdx] = { x: natX, y: natY }
-
-    // Fast 60fps DOM mutation
-    renderSvgElements()
-
-    // Update magnifying loupe
-    updateMagnifier(clientX, clientY, { x: natX, y: natY })
-  }
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (activeDragIndexRef.current !== null) {
-      activeDragIndexRef.current = null
-      hideMagnifier()
-    }
-  }
-
-  // Detect corners automatically if not supplied
-  const runAutoDetection = async () => {
-    const img = imgRef.current
-    if (!img || img.naturalWidth === 0) return
-
-    try {
-      setIsProcessing(true)
-      setError(null)
-      const bitmap = await createImageBitmap(img)
-      const detected = await documentProcessor.detectCorners(bitmap)
-      if (detected && detected.length === 4) {
-        cornersRef.current = detected
-        renderSvgElements()
-      } else {
-        setError("No document edges found. Drag the corners into place.")
-      }
-    } catch (err) {
-      console.error("[Auto-Detect Error]", err)
-      setError("Auto-detect failed. Drag the corners into place.")
-    } finally {
-      setIsProcessing(false)
-    }
-  }
-
-  // Confirm and trigger warpPerspective in Web Worker
-  const handleConfirmWarp = async () => {
-    const img = imgRef.current
-    if (!img || isWarpingRef.current) return
-
-    try {
-      isWarpingRef.current = true
-      setIsProcessing(true)
-      setError(null)
-
-      const bitmap = await createImageBitmap(img)
-      // Copy: the worker call is async and the user could touch a handle meanwhile.
-      const corners = cornersRef.current.map((p) => ({ ...p }))
-
-      // Offload to Web Worker with finalized corner coordinates. The bitmap is
-      // handed straight to the parent (no JPEG round-trip, so no extra
-      // compression loss before filtering).
-      const dewarpedBitmap = await documentProcessor.dewarp(bitmap, corners)
-      await onCropComplete(dewarpedBitmap)
-    } catch (err) {
-      console.error("[Warp Error]", err)
-      setError("Couldn't crop this page. Adjust the corners and try again.")
-    } finally {
-      setIsProcessing(false)
-      isWarpingRef.current = false
-    }
-  }
-
-  // A new photo resets the "user moved a handle" flag.
+  // New photo: reset edit state.
   useEffect(() => {
     userEditedRef.current = false
     setError(null)
+    setLoaded(false)
   }, [src])
 
-  // Corners can arrive after the image has loaded (detection on the captured
-  // photo runs in the background). Apply them unless the user already edited.
+  // Better corners can arrive after load (detection on the captured photo runs in the background).
   useEffect(() => {
-    if (!userEditedRef.current) initCorners()
-  }, [initCorners])
+    if (loaded && !userEditedRef.current) applyInitial()
+  }, [loaded, applyInitial])
 
-  // Keep the overlay aligned when the viewport or container changes size
-  // (rotation, browser chrome collapsing, split screen).
   useEffect(() => {
-    const container = containerRef.current
-    window.addEventListener("resize", updateLayoutMetrics)
-    const observer =
-      typeof ResizeObserver !== "undefined" && container ? new ResizeObserver(() => updateLayoutMetrics()) : null
-    if (container) observer?.observe(container)
+    const c = containerRef.current
+    if (!c) return
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null
+    ro?.observe(c)
+    window.addEventListener("resize", measure)
     return () => {
-      window.removeEventListener("resize", updateLayoutMetrics)
-      observer?.disconnect()
+      ro?.disconnect()
+      window.removeEventListener("resize", measure)
     }
-  }, [updateLayoutMetrics])
+  }, [measure])
+
+  /* ---------------- Dragging ---------------- */
+
+  const drawLoupe = (screen: Point, natural: Point) => {
+    const loupe = loupeRef.current
+    const canvas = loupeCanvasRef.current
+    const img = imgRef.current
+    const c = containerRef.current
+    if (!loupe || !canvas || !img || !c) return
+    const dpr = window.devicePixelRatio || 1
+    const px = Math.round(LOUPE_SIZE * dpr)
+    if (canvas.width !== px) {
+      canvas.width = px
+      canvas.height = px
+    }
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.fillStyle = "#000"
+    ctx.fillRect(0, 0, px, px)
+    ctx.drawImage(img, natural.x - LOUPE_SAMPLE / 2, natural.y - LOUPE_SAMPLE / 2, LOUPE_SAMPLE, LOUPE_SAMPLE, 0, 0, px, px)
+    ctx.strokeStyle = ACCENT
+    ctx.lineWidth = 1.5 * dpr
+    ctx.beginPath()
+    ctx.moveTo(px / 2, px / 2 - 12 * dpr)
+    ctx.lineTo(px / 2, px / 2 + 12 * dpr)
+    ctx.moveTo(px / 2 - 12 * dpr, px / 2)
+    ctx.lineTo(px / 2 + 12 * dpr, px / 2)
+    ctx.stroke()
+
+    // Keep the loupe in the corner away from the finger.
+    const { width } = c.getBoundingClientRect()
+    const left = screen.x < width / 2 ? width - LOUPE_SIZE - 12 : 12
+    loupe.style.transform = `translate3d(${left}px, 12px, 0)`
+    loupe.style.opacity = "1"
+  }
+
+  const onHandleDown = (index: number) => (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const l = layoutRef.current
+    const c = containerRef.current
+    if (!l || !c || busyRef.current) return
+    const cr = c.getBoundingClientRect()
+    const p = toScreen(cornersRef.current[index], l)
+    // Keep the grab offset so the corner doesn't jump under the finger.
+    dragRef.current = { index, pointerId: e.pointerId, offsetX: p.x - (e.clientX - cr.left), offsetY: p.y - (e.clientY - cr.top) }
+    userEditedRef.current = true
+    setError(null)
+    ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const drag = dragRef.current
+    const l = layoutRef.current
+    const c = containerRef.current
+    if (!drag || drag.pointerId !== e.pointerId || !l || !c) return
+    e.preventDefault()
+    const cr = c.getBoundingClientRect()
+    const sx = Math.min(l.left + l.width, Math.max(l.left, e.clientX - cr.left + drag.offsetX))
+    const sy = Math.min(l.top + l.height, Math.max(l.top, e.clientY - cr.top + drag.offsetY))
+    const natural = {
+      x: ((sx - l.left) / l.width) * l.naturalWidth,
+      y: ((sy - l.top) / l.height) * l.naturalHeight,
+    }
+    cornersRef.current[drag.index] = natural
+    render()
+    drawLoupe({ x: sx, y: sy }, natural)
+  }
+
+  const endDrag = (e: React.PointerEvent) => {
+    if (dragRef.current?.pointerId !== e.pointerId) return
+    dragRef.current = null
+    if (loupeRef.current) loupeRef.current.style.opacity = "0"
+    setIsFullPage(false)
+  }
+
+  /* ---------------- Actions ---------------- */
+
+  const toggleFrame = async () => {
+    const img = imgRef.current
+    if (!img?.naturalWidth || busyRef.current) return
+    setError(null)
+    if (!isFullPage) {
+      setCorners(fullFrame(img.naturalWidth, img.naturalHeight))
+      setIsFullPage(true)
+      userEditedRef.current = true
+      return
+    }
+    // Back from full page: re-run detection on the photo.
+    busyRef.current = true
+    setBusy("detect")
+    try {
+      const detected = await documentProcessor.detectCorners(await createImageBitmap(img))
+      if (detected?.length === 4) {
+        setCorners(detected)
+        setIsFullPage(false)
+      } else {
+        setError("No edges found. Drag the corners into place.")
+      }
+    } catch (err) {
+      console.error("[Crop] detect failed", err)
+      setError("Detection failed. Drag the corners into place.")
+    } finally {
+      busyRef.current = false
+      setBusy(null)
+    }
+  }
+
+  const confirm = async () => {
+    const img = imgRef.current
+    if (!img?.naturalWidth || busyRef.current) return
+    busyRef.current = true
+    setBusy("crop")
+    setError(null)
+    try {
+      const bitmap = await createImageBitmap(img)
+      const corners = cornersRef.current.map((p) => ({ ...p }))
+      const page = await documentProcessor.dewarp(bitmap, corners)
+      await onCropComplete(page, corners)
+    } catch (err) {
+      console.error("[Crop] dewarp failed", err)
+      setError("Couldn't crop this page. Adjust the corners and try again.")
+    } finally {
+      busyRef.current = false
+      setBusy(null)
+    }
+  }
 
   return (
-    <div className="relative flex flex-col h-full w-full select-none overflow-hidden bg-black text-white">
-      {/* Interactive Crop Viewport */}
+    <div className="flex h-full w-full select-none flex-col bg-black text-white">
+      <header
+        className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center px-3 pb-2"
+        style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
+      >
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={!!busy}
+          className="flex h-10 items-center gap-1.5 justify-self-start rounded-full px-3 text-sm font-medium text-white/85 active:bg-white/10 disabled:opacity-40"
+        >
+          <X className="size-5" />
+          Retake
+        </button>
+        <span className="text-sm font-semibold">Adjust corners</span>
+        <span aria-hidden />
+      </header>
+
       <div
         ref={containerRef}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden touch-none"
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className="relative min-h-0 flex-1 touch-none overflow-hidden"
       >
-        <img
-          ref={imgRef}
-          src={src}
-          alt="Document for corner adjustment"
-          onLoad={initCorners}
-          draggable={false}
-          className="max-h-full max-w-full object-contain pointer-events-none select-none opacity-90"
-        />
-
-        {/* SVG Polygon Overlay & Corner Draggable Handles */}
-        <svg
-          ref={svgRef}
-          className="absolute inset-0 h-full w-full pointer-events-none overflow-visible"
-        >
-          {/* Shaded Quadrilateral Polygon */}
-          <polygon
-            ref={polygonRef}
-            className="fill-teal-500/20 stroke-teal-400 [stroke-width:2.5px] [stroke-dasharray:6_4] filter drop-shadow-[0_0_8px_rgba(20,184,166,0.6)]"
+        {/* Padding keeps corner handles at the photo's edge reachable. */}
+        <div className="absolute inset-0 flex items-center justify-center p-7">
+          <img
+            ref={imgRef}
+            src={src}
+            alt="Captured photo"
+            onLoad={() => {
+              measure()
+              setLoaded(true)
+            }}
+            draggable={false}
+            className="pointer-events-none max-h-full max-w-full object-contain"
           />
+        </div>
 
-          {/* Draggable Corner Handles with Large Invisible Hit-Slop (48px) */}
-          {[0, 1, 2, 3].map((idx) => (
+        <svg className={cn("absolute inset-0 h-full w-full", !loaded && "invisible")}>
+          <path ref={shadeRef} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
+          <polygon ref={outlineRef} fill="none" stroke={ACCENT} strokeWidth={2.5} strokeLinejoin="round" />
+          {[0, 1, 2, 3].map((i) => (
             <g
-              key={idx}
+              key={i}
               ref={(el) => {
-                handleRefs.current[idx] = el
+                handleRefs.current[i] = el
               }}
-              onPointerDown={handlePointerDown(idx)}
-              className="pointer-events-auto cursor-grab active:cursor-grabbing"
+              onPointerDown={onHandleDown(i)}
+              className="cursor-grab"
+              role="slider"
+              aria-label={["Top-left corner", "Top-right corner", "Bottom-right corner", "Bottom-left corner"][i]}
             >
-              {/* Invisible 48px Touch Hit-Slop for mobile finger ease */}
-              <circle r="26" fill="transparent" />
-
-              {/* Outer Cyan Glow Ring */}
-              <circle
-                r="11"
-                className="fill-teal-500/40 stroke-teal-400 stroke-2 filter drop-shadow-[0_0_6px_#14b8a6]"
-              />
-
-              {/* Inner White Target Pin */}
-              <circle r="4.5" fill="#ffffff" />
+              {/* 52px invisible touch target */}
+              <circle r={26} fill="transparent" />
+              <circle r={10} fill="white" stroke={ACCENT} strokeWidth={3} />
             </g>
           ))}
         </svg>
 
-        {/* Localized Floating Magnifier Reticle (Offset above user's touch) */}
         <div
-          ref={magnifierContainerRef}
-          className="fixed top-0 left-0 z-50 pointer-events-none transition-opacity duration-100 opacity-0 will-change-transform"
+          ref={loupeRef}
+          className="pointer-events-none absolute left-0 top-0 overflow-hidden rounded-full border-2 border-white opacity-0 shadow-xl transition-opacity duration-100"
+          style={{ width: LOUPE_SIZE, height: LOUPE_SIZE }}
         >
-          <div className="relative size-[110px] rounded-full overflow-hidden border-2 border-white shadow-2xl shadow-teal-500/40 bg-black">
-            <canvas ref={magnifierCanvasRef} className="size-full" />
-          </div>
+          <canvas ref={loupeCanvasRef} className="size-full" />
         </div>
+
+        {error ? (
+          <p
+            role="alert"
+            className="absolute inset-x-4 bottom-3 mx-auto max-w-sm rounded-xl bg-rose-600 px-4 py-2.5 text-center text-sm font-medium text-white"
+          >
+            {error}
+          </p>
+        ) : null}
       </div>
 
-      {error ? (
-        <p
-          role="alert"
-          className="absolute inset-x-4 bottom-24 z-40 mx-auto max-w-sm rounded-xl bg-rose-600/90 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg"
+      <footer
+        className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3"
+        style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+      >
+        <button
+          type="button"
+          onClick={toggleFrame}
+          disabled={!loaded || !!busy}
+          className="flex h-12 items-center gap-2 rounded-full bg-white/10 px-4 text-sm font-medium active:bg-white/20 disabled:opacity-40"
         >
-          {error}
-        </p>
-      ) : null}
-
-      {/* Bottom Floating Control Bar */}
-      <footer className="relative z-30 flex items-center justify-between p-4 bg-gradient-to-t from-black via-black/90 to-transparent">
-        <Button
-          onClick={runAutoDetection}
-          variant="secondary"
-          size="sm"
-          disabled={isProcessing}
-          className="rounded-full bg-white/10 text-white hover:bg-white/20 border border-white/10 backdrop-blur-md"
-        >
-          <Sparkles className="mr-1.5 size-4 text-teal-400" />
-          Auto-Detect
-        </Button>
-
-        <div className="flex items-center gap-3">
-          {onCancel && (
-            <Button
-              onClick={onCancel}
-              variant="ghost"
-              size="sm"
-              disabled={isProcessing}
-              className="rounded-full text-white/70 hover:text-white hover:bg-white/10"
-            >
-              Cancel
-            </Button>
+          {busy === "detect" ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : isFullPage ? (
+            <ScanLine className="size-4" />
+          ) : (
+            <Maximize className="size-4" />
           )}
-
-          <Button
-            onClick={handleConfirmWarp}
-            disabled={isProcessing}
-            size="lg"
-            className="rounded-full bg-teal-500 hover:bg-teal-600 text-white font-semibold shadow-lg shadow-teal-500/30 px-6 h-12"
-          >
-            <Check className="mr-2 size-5" />
-            {isProcessing ? "Dewarping..." : "Done"}
-          </Button>
-        </div>
+          {isFullPage ? "Detect edges" : "Full page"}
+        </button>
+        <button
+          type="button"
+          onClick={confirm}
+          disabled={!loaded || !!busy}
+          className="flex h-12 items-center gap-2 rounded-full bg-primary px-6 text-sm font-semibold text-primary-foreground active:opacity-90 disabled:opacity-50"
+        >
+          {busy === "crop" ? <Loader2 className="size-4 animate-spin" /> : null}
+          Next
+          {busy !== "crop" ? <ArrowRight className="size-4" /> : null}
+        </button>
       </footer>
     </div>
   )

@@ -1,198 +1,149 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import {
-  ArrowLeft,
-  ChevronRight,
-  LogOut,
-  CloudUpload,
-  Wifi,
-  Check,
-} from "lucide-react"
+import { useTheme } from "next-themes"
+import { ArrowLeft, HardDrive, ShieldCheck, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { cn } from "@/lib/utils"
-
-type Quality = "high" | "medium" | "low"
-type Format = "pdf" | "jpeg"
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-300 ease-in-out outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        checked ? "border-primary bg-primary" : "border-border bg-secondary",
-      )}
-    >
-      <span
-        className={cn(
-          "inline-block size-4 transform rounded-full bg-card shadow-sm ring-1 ring-foreground/10 transition-transform duration-300 ease-in-out",
-          checked ? "translate-x-[22px]" : "translate-x-0.5",
-        )}
-      />
-    </button>
-  )
-}
+import { useSettings } from "@/lib/settings"
+import { deleteAllData, listDocuments } from "@/lib/db/indexed-db"
+import { formatBytes, pluralPages } from "@/lib/format"
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-      {children}
-    </h2>
+    <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{children}</h2>
   )
 }
 
-/* Cloud provider logo marks (simple, brand-neutral glyphs) */
-function GoogleDriveMark() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
-      <path d="M8.4 3.5h7.2l7.2 12.5h-7.2L8.4 3.5Z" fill="currentColor" opacity="0.55" />
-      <path d="M1.2 16 4.8 9.75 12 22.25l-3.6.0L1.2 16Z" fill="currentColor" opacity="0.85" />
-      <path d="M8.4 22.25 15.6 16h7.2l-3.6 6.25H8.4Z" fill="currentColor" opacity="0.4" />
-    </svg>
-  )
+function Card({ children }: { children: React.ReactNode }) {
+  return <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">{children}</div>
 }
 
-function OneDriveMark() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
-      <path
-        d="M10.5 7.2a5 5 0 0 1 8.7 2.1 3.8 3.8 0 0 1-.4 7.5H7a4.2 4.2 0 0 1-.9-8.3 5 5 0 0 1 4.4-1.3Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function CloudProvider({
-  name,
-  detail,
-  mark,
-  connected,
-  onToggle,
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
 }: {
-  name: string
-  detail: string
-  mark: React.ReactNode
-  connected: boolean
-  onToggle: () => void
+  label: string
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (v: T) => void
 }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3.5">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground">
-        {mark}
+    <div className="flex items-center justify-between gap-3 px-4 py-3">
+      <span className="text-sm font-medium text-foreground">{label}</span>
+      <div role="radiogroup" aria-label={label} className="inline-flex shrink-0 rounded-lg bg-secondary p-0.5">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={value === opt.value}
+            onClick={() => onChange(opt.value)}
+            className={cn(
+              "rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+              value === opt.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{name}</p>
-        <p className="truncate text-xs text-muted-foreground">{connected ? detail : "Not connected"}</p>
-      </div>
-      <button
-        type="button"
-        onClick={onToggle}
-        className={cn(
-          "flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors",
-          connected
-            ? "bg-secondary text-foreground"
-            : "bg-primary text-primary-foreground hover:opacity-90",
-        )}
-      >
-        {connected ? (
-          <>
-            <Check className="size-3.5" />
-            Linked
-          </>
-        ) : (
-          "Connect"
-        )}
-      </button>
     </div>
   )
 }
 
-function ToggleRow({
-  icon,
+function SwitchRow({
   title,
   subtitle,
   checked,
   onChange,
 }: {
-  icon: React.ReactNode
   title: string
   subtitle: string
   checked: boolean
   onChange: (v: boolean) => void
 }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3.5">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
-        {icon}
-      </div>
+    <div className="flex items-center gap-3 px-4 py-3">
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground">{title}</p>
-        <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
+        <p className="text-xs text-muted-foreground">{subtitle}</p>
       </div>
-      <Toggle checked={checked} onChange={onChange} label={title} />
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={title}
+        onClick={() => onChange(!checked)}
+        className={cn(
+          "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-300 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          checked ? "border-primary bg-primary" : "border-border bg-secondary",
+        )}
+      >
+        <span
+          className={cn(
+            "inline-block size-4 rounded-full bg-card shadow-sm ring-1 ring-foreground/10 transition-transform duration-300",
+            checked ? "translate-x-[22px]" : "translate-x-0.5",
+          )}
+        />
+      </button>
     </div>
   )
 }
 
-function PrefRow({
-  title,
-  value,
-  onCycle,
-}: {
-  title: string
-  value: string
-  onCycle: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onCycle}
-      className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-secondary/50"
-    >
-      <span className="flex-1 text-sm font-medium text-foreground">{title}</span>
-      <span className="text-sm text-muted-foreground">{value}</span>
-      <ChevronRight className="size-4 text-muted-foreground" />
-    </button>
-  )
-}
-
-function Divider() {
-  return <div className="mx-4 h-px bg-border" />
-}
-
 export default function SettingsPage() {
-  const [driveConnected, setDriveConnected] = useState(true)
-  const [oneDriveConnected, setOneDriveConnected] = useState(false)
-  const [autoUpload, setAutoUpload] = useState(true)
-  const [wifiOnly, setWifiOnly] = useState(true)
+  const { settings, update } = useSettings()
+  const { theme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  const [storage, setStorage] = useState<{ docs: number; pages: number; bytes: number | null } | null>(null)
+  const [confirmWipe, setConfirmWipe] = useState(false)
+  const [wiping, setWiping] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
 
-  const qualities: Quality[] = ["high", "medium", "low"]
-  const formats: Format[] = ["pdf", "jpeg"]
-  const [quality, setQuality] = useState<Quality>("high")
-  const [format, setFormat] = useState<Format>("pdf")
+  const loadStorage = useCallback(async () => {
+    try {
+      const docs = await listDocuments()
+      const estimate = await navigator.storage?.estimate?.().catch(() => undefined)
+      setStorage({
+        docs: docs.length,
+        pages: docs.reduce((n, d) => n + d.pageCount, 0),
+        bytes: estimate?.usage ?? null,
+      })
+    } catch (err) {
+      console.error("[Settings] storage info failed", err)
+    }
+  }, [])
 
-  const qualityLabel = { high: "High", medium: "Medium", low: "Low" }[quality]
-  const formatLabel = { pdf: "PDF", jpeg: "JPEG" }[format]
+  useEffect(() => {
+    setMounted(true)
+    loadStorage()
+  }, [loadStorage])
+
+  const wipe = async () => {
+    setWiping(true)
+    try {
+      await deleteAllData()
+      setNotice("All documents deleted")
+      await loadStorage()
+    } catch (err) {
+      console.error("[Settings] delete all failed", err)
+      setNotice("Couldn't delete documents")
+    } finally {
+      setWiping(false)
+      setConfirmWipe(false)
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-background text-foreground">
-      {/* Header */}
-      <header className="sticky top-0 z-20 flex items-center gap-1 bg-background/90 px-2 py-3 backdrop-blur">
+      <header
+        className="sticky top-0 z-20 flex items-center gap-1 bg-background/90 px-2 pb-3 backdrop-blur"
+        style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
+      >
         <Button
           variant="ghost"
           size="icon"
@@ -208,101 +159,142 @@ export default function SettingsPage() {
         <h1 className="text-lg font-semibold">Settings</h1>
       </header>
 
-      <div className="scrollbar-hidden flex-1 overflow-y-auto px-4 pb-10 pt-2">
-        {/* Account */}
-        <section className="mb-7">
-          <div className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
-            <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/15 text-base font-semibold text-primary">
-              AM
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-foreground">Alex Morgan</p>
-              <p className="truncate text-xs text-muted-foreground">alex.morgan@example.com</p>
+      <div className="flex-1 space-y-7 px-4 pb-10 pt-2">
+        <section>
+          <SectionLabel>Appearance</SectionLabel>
+          <Card>
+            <Segmented
+              label="Theme"
+              value={(mounted ? theme : "system") as "system" | "light" | "dark"}
+              onChange={setTheme}
+              options={[
+                { value: "system", label: "Auto" },
+                { value: "light", label: "Light" },
+                { value: "dark", label: "Dark" },
+              ]}
+            />
+          </Card>
+        </section>
+
+        <section>
+          <SectionLabel>Scanning</SectionLabel>
+          <Card>
+            <Segmented
+              label="Default filter"
+              value={settings.defaultFilter}
+              onChange={(v) => update({ defaultFilter: v })}
+              options={[
+                { value: "magic-color", label: "Magic" },
+                { value: "bw", label: "B&W" },
+                { value: "none", label: "Original" },
+              ]}
+            />
+            <Segmented
+              label="Start in"
+              value={settings.defaultMode}
+              onChange={(v) => update({ defaultMode: v })}
+              options={[
+                { value: "single", label: "Single" },
+                { value: "batch", label: "Batch" },
+              ]}
+            />
+            <SwitchRow
+              title="Auto-capture"
+              subtitle="Take the photo when the page holds still"
+              checked={settings.autoCapture}
+              onChange={(v) => update({ autoCapture: v })}
+            />
+          </Card>
+        </section>
+
+        <section>
+          <SectionLabel>PDF export</SectionLabel>
+          <Card>
+            <Segmented
+              label="Page size"
+              value={settings.pdfPageSize}
+              onChange={(v) => update({ pdfPageSize: v })}
+              options={[
+                { value: "a4", label: "A4" },
+                { value: "letter", label: "Letter" },
+                { value: "auto", label: "Auto" },
+              ]}
+            />
+            <Segmented
+              label="Image quality"
+              value={settings.pdfQuality}
+              onChange={(v) => update({ pdfQuality: v })}
+              options={[
+                { value: "high", label: "High" },
+                { value: "medium", label: "Med" },
+                { value: "low", label: "Low" },
+              ]}
+            />
+          </Card>
+        </section>
+
+        <section>
+          <SectionLabel>Storage</SectionLabel>
+          <Card>
+            <div className="flex items-center gap-3 px-4 py-3.5">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
+                <HardDrive className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-foreground">
+                  {storage
+                    ? `${storage.docs} ${storage.docs === 1 ? "document" : "documents"} · ${pluralPages(storage.pages)}`
+                    : "Calculating…"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {storage?.bytes != null ? `${formatBytes(storage.bytes)} used on this device` : "Stored on this device"}
+                </p>
+              </div>
             </div>
             <button
               type="button"
-              className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
+              onClick={() => setConfirmWipe(true)}
+              disabled={!storage || storage.docs === 0}
+              className="flex w-full items-center gap-3 px-4 py-3.5 text-left text-sm font-medium text-destructive transition-colors hover:bg-destructive/5 disabled:pointer-events-none disabled:opacity-40"
             >
-              Switch
+              <Trash2 className="size-4" />
+              Delete all documents
             </button>
+          </Card>
+          {notice ? (
+            <p role="status" className="mt-2 px-1 text-xs text-muted-foreground">
+              {notice}
+            </p>
+          ) : null}
+        </section>
+
+        <section>
+          <div className="flex gap-3 rounded-2xl border border-border bg-card p-4">
+            <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Doku Scan works fully offline. Your scans never leave this device unless you share or
+              export them yourself. No account, no cloud, no tracking.
+            </p>
           </div>
         </section>
 
-        {/* Cloud Destination */}
-        <section className="mb-7">
-          <SectionLabel>Cloud Destination</SectionLabel>
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
-            <CloudProvider
-              name="Google Drive"
-              detail="Scans · /Documents"
-              mark={<GoogleDriveMark />}
-              connected={driveConnected}
-              onToggle={() => setDriveConnected((v) => !v)}
-            />
-            <Divider />
-            <CloudProvider
-              name="Microsoft OneDrive"
-              detail="Synced"
-              mark={<OneDriveMark />}
-              connected={oneDriveConnected}
-              onToggle={() => setOneDriveConnected((v) => !v)}
-            />
-            <Divider />
-            <ToggleRow
-              icon={<CloudUpload className="size-4" />}
-              title="Auto-upload new scans"
-              subtitle="Send scans to your linked cloud"
-              checked={autoUpload}
-              onChange={setAutoUpload}
-            />
-            <Divider />
-            <ToggleRow
-              icon={<Wifi className="size-4" />}
-              title="Sync over Wi-Fi only"
-              subtitle="Avoid using mobile data"
-              checked={wifiOnly}
-              onChange={setWifiOnly}
-            />
-          </div>
-          <p className="mt-2 px-1 text-[11px] leading-relaxed text-muted-foreground">
-            Files upload directly to your personal cloud. We never store your documents on our
-            servers.
-          </p>
-        </section>
-
-        {/* App Preferences */}
-        <section className="mb-7">
-          <SectionLabel>App Preferences</SectionLabel>
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
-            <PrefRow
-              title="Default Scan Quality"
-              value={qualityLabel}
-              onCycle={() =>
-                setQuality(qualities[(qualities.indexOf(quality) + 1) % qualities.length])
-              }
-            />
-            <Divider />
-            <PrefRow
-              title="Default Export Format"
-              value={formatLabel}
-              onCycle={() => setFormat(formats[(formats.indexOf(format) + 1) % formats.length])}
-            />
-          </div>
-        </section>
-
-        {/* Session */}
-        <section className="mb-6">
-          <button
-            type="button"
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-card py-3.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/5"
-          >
-            <LogOut className="size-4" />
-            Sign Out
-          </button>
-        </section>
-
-        <p className="text-center text-[11px] text-muted-foreground">Scanner · v1.0.0 · Open Source</p>
+        <p className="text-center text-[11px] text-muted-foreground">Doku Scan · v{process.env.NEXT_PUBLIC_APP_VERSION}</p>
       </div>
+
+      <ConfirmDialog
+        open={confirmWipe}
+        title="Delete all documents?"
+        description={
+          storage
+            ? `${storage.docs} ${storage.docs === 1 ? "document" : "documents"} (${pluralPages(storage.pages)}) will be permanently removed from this device. This can't be undone.`
+            : undefined
+        }
+        confirmLabel="Delete all"
+        destructive
+        busy={wiping}
+        onConfirm={wipe}
+        onCancel={() => setConfirmWipe(false)}
+      />
     </main>
   )
 }

@@ -15,6 +15,7 @@ import {
   type Quality,
 } from "@/lib/pdf/export-pdf"
 import { cn } from "@/lib/utils"
+import { loadSettings } from "@/lib/settings"
 
 function Toggle({
   checked,
@@ -140,6 +141,8 @@ export function PdfExportSheet({
   onReorder,
   onRemove,
   onExported,
+  filename,
+  showPages = true,
 }: {
   open: boolean
   onClose: () => void
@@ -147,9 +150,12 @@ export function PdfExportSheet({
   onReorder: (orderedIds: string[]) => void
   onRemove: (id: string) => void
   onExported?: (result: DeliveryResult) => void
+  /** Output file name (".pdf" included). Defaults to a timestamped name. */
+  filename?: string
+  /** Hide the page grid when the caller already shows the pages. */
+  showPages?: boolean
 }) {
   const [mounted, setMounted] = useState(false)
-  const [visible, setVisible] = useState(false)
 
   const [pageSize, setPageSize] = useState<PageSize>("a4")
   const [quality, setQuality] = useState<Quality>("high")
@@ -165,10 +171,18 @@ export function PdfExportSheet({
 
   useEffect(() => setMounted(true), [])
 
-  // Animate in/out and lock body scroll
+  // Each time the sheet opens, start from the user's saved PDF defaults.
+  useEffect(() => {
+    if (!open) return
+    const s = loadSettings()
+    setPageSize(s.pdfPageSize)
+    setQuality(s.pdfQuality)
+    setExportError(null)
+  }, [open])
+
+  // Lock body scroll while open
   useEffect(() => {
     if (open) {
-      setVisible(true)
       document.body.style.overflow = "hidden"
     } else {
       document.body.style.overflow = ""
@@ -194,7 +208,7 @@ export function PdfExportSheet({
     setExportError(null)
     setProgress({ done: 0, total: pages.length })
     try {
-      const filename = defaultPdfFilename()
+      const name = filename ?? defaultPdfFilename()
       const blob = await buildPdf(
         pages,
         {
@@ -205,7 +219,7 @@ export function PdfExportSheet({
         },
         setProgress,
       )
-      const result = await deliverPdf(blob, filename)
+      const result = await deliverPdf(blob, name)
       onExported?.(result)
       if (result !== "cancelled") onClose()
     } catch (err) {
@@ -273,6 +287,8 @@ export function PdfExportSheet({
         {/* Scrollable content */}
         <div className="scrollbar-minimal flex-1 overflow-y-auto px-5 pb-4">
           {/* Pages section */}
+          {showPages ? (
+          <>
           <div className="flex items-baseline justify-between">
             <SectionLabel>
               Pages{pages.length > 0 ? ` · ${pages.length}` : ""}
@@ -298,6 +314,8 @@ export function PdfExportSheet({
               </div>
             )}
           </div>
+          </>
+          ) : null}
 
           {/* Document section */}
           <SectionLabel>Document</SectionLabel>

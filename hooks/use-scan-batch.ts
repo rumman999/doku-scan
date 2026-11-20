@@ -69,6 +69,12 @@ export function useScanBatch(sessionId: string = DEFAULT_SESSION) {
 
   useEffect(() => {
     let cancelled = false
+    // A different session: drop the previous one's pages before loading.
+    pagesRef.current.forEach((p) => URL.revokeObjectURL(p.thumbUrl))
+    pagesRef.current = []
+    setPages([])
+    setReady(false)
+    setError(null)
     listPages(sessionId)
       .then((metas) => {
         if (cancelled) return
@@ -155,5 +161,12 @@ export function useScanBatch(sessionId: string = DEFAULT_SESSION) {
     await clearSession(sessionId)
   }, [sessionId])
 
-  return { pages, ready, error, addFromBitmap, remove, reorder, clear }
+  /** Drop local state only: the pages were moved elsewhere in storage (e.g. saved as a document). */
+  const forget = useCallback(() => {
+    pagesRef.current.forEach((p) => URL.revokeObjectURL(p.thumbUrl))
+    pagesRef.current = []
+    setPages([])
+  }, [])
+
+  return { pages, ready, error, addFromBitmap, remove, reorder, clear, forget }
 }
