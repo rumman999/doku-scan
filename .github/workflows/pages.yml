@@ -2,10 +2,10 @@
 # One-time: repo Settings > Pages > Build and deployment > Source: "GitHub Actions".
 name: Website
 
+# Every push to main republishes the site (it's tiny), plus a manual "Run workflow" button.
 on:
   push:
     branches: [main]
-    paths: [site/**, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
