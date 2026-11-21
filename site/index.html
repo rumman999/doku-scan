@@ -62,11 +62,12 @@
     background: linear-gradient(160deg, #27272a 0%, #09090b 100%);
   }
   .statusbar { position: absolute; left: 0; right: 0; top: 0; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; font-size: 12px; color: #a1a1aa; font-weight: 600; }
-  .paper { position: absolute; left: 34px; top: 88px; width: 232px; height: 330px; transform: rotate(-4deg); background: #f4f4f5; border-radius: 6px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5); }
+  .doc { position: absolute; left: 34px; top: 88px; width: 232px; height: 330px; transform: rotate(-4deg); }
+  .paper { position: absolute; inset: 0; background: #f4f4f5; border-radius: 6px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5); }
   .paper i { position: absolute; left: 26px; height: 8px; border-radius: 4px; background: #a1a1aa; display: block; }
   .paper i.title { top: 34px; width: 150px; height: 12px; background: #18181b; }
-  .outline { position: absolute; left: 34px; top: 88px; width: 232px; height: 330px; transform: rotate(-4deg); border: 2px solid #fb7185; border-radius: 6px; box-sizing: border-box; }
-  .handle { position: absolute; width: 18px; height: 18px; border-radius: 999px; background: #fb7185; border: 3px solid #09090b; transform: rotate(-4deg); }
+  .outline { position: absolute; inset: 0; border: 2px solid #fb7185; border-radius: 6px; box-sizing: border-box; }
+  .handle { position: absolute; width: 18px; height: 18px; border-radius: 999px; background: #fb7185; border: 3px solid #09090b; }
   .shutter { position: absolute; left: 0; right: 0; bottom: 0; height: 120px; display: flex; align-items: center; justify-content: center; background: linear-gradient(0deg, #09090b 60%, transparent); }
   .shutter-ring { width: 68px; height: 68px; border-radius: 999px; border: 4px solid #fafafa; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
   .shutter-ring span { width: 52px; height: 52px; border-radius: 999px; background: #fafafa; display: block; }
@@ -152,22 +153,24 @@
       <div class="phone">
         <div class="screen">
           <div class="statusbar"><span>9:41</span><span>100%</span></div>
-          <div class="paper">
-            <i class="title" style="left:26px"></i>
-            <i style="top:62px;width:180px"></i>
-            <i style="top:80px;width:160px"></i>
-            <i style="top:98px;width:172px"></i>
-            <i style="top:132px;width:120px"></i>
-            <i style="top:150px;width:180px"></i>
-            <i style="top:168px;width:140px"></i>
-            <i style="top:202px;width:180px"></i>
-            <i style="top:220px;width:150px"></i>
+          <div class="doc">
+            <div class="paper">
+              <i class="title" style="left:26px"></i>
+              <i style="top:62px;width:180px"></i>
+              <i style="top:80px;width:160px"></i>
+              <i style="top:98px;width:172px"></i>
+              <i style="top:132px;width:120px"></i>
+              <i style="top:150px;width:180px"></i>
+              <i style="top:168px;width:140px"></i>
+              <i style="top:202px;width:180px"></i>
+              <i style="top:220px;width:150px"></i>
+            </div>
+            <div class="outline"></div>
+            <div class="handle" style="left:-12px;top:-12px"></div>
+            <div class="handle" style="left:220px;top:-12px"></div>
+            <div class="handle" style="left:220px;top:318px"></div>
+            <div class="handle" style="left:-12px;top:318px"></div>
           </div>
-          <div class="outline"></div>
-          <div class="handle" style="left:24px;top:78px"></div>
-          <div class="handle" style="left:262px;top:68px"></div>
-          <div class="handle" style="left:250px;top:398px"></div>
-          <div class="handle" style="left:14px;top:388px"></div>
           <div class="shutter"><div class="shutter-ring"><span></span></div></div>
         </div>
       </div>
