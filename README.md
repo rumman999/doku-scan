@@ -106,6 +106,14 @@ Then `pnpm build && npx cap sync android && cd android && ./gradlew assembleRele
 `android/app/build/outputs/apk/release/app-release.apk`. Google sign-in only works for APKs signed with
 a key whose SHA-1 is registered as an Android client in the Google Cloud project (see above).
 
+### Google Play
+
+Play takes an Android App Bundle instead of an APK: run `./gradlew bundleRelease` (after the same
+`pnpm build && npx cap sync android`) and upload `android/app/build/outputs/bundle/release/app-release.aab`.
+Raise `versionCode` in `android/app/build.gradle` for every upload. In Play App Signing, choose to use
+the existing release key so Play builds keep the same signature as the GitHub APKs (users can switch
+between them, and Google sign-in keeps working). Store icon and feature graphic are in `store/`.
+
 ## Architecture
 - `app/` — screens: library (`/`), document (`/doc?id=`), scanner (`/scan`), settings.
 - `lib/cv/` — detection, dewarp and filters (OpenCV.js). `lib/cv/worker.ts` is bundled to `public/cv-worker.js` by `scripts/build-worker.mjs`; `public/opencv.js` is vendored OpenCV 4.8.0.
