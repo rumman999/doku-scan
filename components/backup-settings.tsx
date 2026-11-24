@@ -20,9 +20,9 @@ import type { SyncResult } from "@/lib/drive/sync"
 function DriveMark() {
   return (
     <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
-      <path d="M8.4 3.5h7.2l7.2 12.5h-7.2L8.4 3.5Z" fill="currentColor" opacity="0.55" />
-      <path d="M1.2 16 4.8 9.75 12 22.25H8.4L1.2 16Z" fill="currentColor" opacity="0.85" />
-      <path d="M8.4 22.25 15.6 16h7.2l-3.6 6.25H8.4Z" fill="currentColor" opacity="0.4" />
+      <path d="M8.5 3.5 12 9.56 5 21.68 1.5 15.62Z" fill="#0F9D58" />
+      <path d="M8.5 3.5h7l7 12.12h-14L12 9.56Z" fill="#FFBA00" />
+      <path d="M8.5 15.62h14l-3.5 6.06H5Z" fill="#4285F4" />
     </svg>
   )
 }
