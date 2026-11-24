@@ -52,3 +52,6 @@ next-env.d.ts
 # local third-party analysis files: never commit
 /artifacts/
 *.apk
+
+# Raw phone screenshots (may contain personal info); framed store copies live in store/screenshots
+/screenshots/
