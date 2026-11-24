@@ -115,6 +115,8 @@ export class DocumentProcessorClient {
       epsilonFactor?: number;
       dilationKernelSize?: number;
       minAreaFraction?: number;
+      /** Quad tracked on the previous frame, in `source` pixel coordinates. */
+      prior?: Point[];
     }
   ): Promise<Point[] | null> {
     await this.init();

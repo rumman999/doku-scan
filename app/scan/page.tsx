@@ -15,6 +15,7 @@ import { scheduleBackup } from "@/lib/drive/backup"
 import { cn } from "@/lib/utils"
 import { documentProcessor } from "@/lib/cv/processor-client"
 import type { Point } from "@/lib/cv/document-processor"
+import { OutlineTracker, maxCornerShift } from "@/lib/cv/outline-tracker"
 import { BW_OPTIONS, MAGIC_COLOR_OPTIONS } from "@/lib/cv/presets"
 
 type ScanMode = "single" | "batch"
@@ -25,8 +26,6 @@ const RAW_FRAME_JPEG_QUALITY = 0.92
 const DETECT_MAX_SIDE = 640
 /** Minimum time between detection passes (~10/s max); keeps the outline live without hogging the phone. */
 const DETECT_MIN_INTERVAL_MS = 100
-/** Consecutive misses before the outline is dropped (prevents flicker on a single bad frame). */
-const LOST_AFTER_MISSES = 3
 /** How long the page must hold still before auto-capture fires. */
 const STEADY_MS = 1200
 /** Max corner drift (fraction of the frame's long side) that still counts as holding still. */
@@ -35,6 +34,8 @@ const STEADY_TOLERANCE = 0.025
 const REARM_MOVE = 0.08
 /** Outline easing per animation frame (0..1). Higher = snappier, lower = smoother. */
 const OUTLINE_EASE = 0.35
+/** A target jump beyond this (fraction of the long side) is a new page: snap, don't morph across. */
+const OUTLINE_SNAP = 0.15
 const ACCENT = "#3b82f6"
 
 const FILTER_LABELS: Record<ScanFilter, string> = { "magic-color": "Enhanced", bw: "B&W", none: "Original" }
@@ -46,10 +47,6 @@ async function renderFiltered(page: ImageBitmap, filter: ScanFilter): Promise<Im
   if (filter === "magic-color") return documentProcessor.magicColor(copy, MAGIC_COLOR_OPTIONS)
   if (filter === "bw") return documentProcessor.applyBw(copy, BW_OPTIONS)
   return copy
-}
-
-function maxCornerShift(a: Point[], b: Point[]): number {
-  return Math.max(...a.map((p, i) => Math.hypot(p.x - b[i].x, p.y - b[i].y)))
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -121,7 +118,7 @@ function ScanScreen() {
 
   // Detection (refs: updated ~10x/s without re-rendering React)
   const targetRef = useRef<Point[] | null>(null)
-  const missesRef = useRef(0)
+  const trackerRef = useRef(new OutlineTracker())
   const anchorRef = useRef<Point[] | null>(null)
   const steadySinceRef = useRef(0)
   const autoArmedRef = useRef(true)
@@ -278,19 +275,20 @@ function ScanScreen() {
     targetRef.current = null
     anchorRef.current = null
     steadySinceRef.current = 0
-    missesRef.current = 0
+    trackerRef.current.reset()
     setDetected(false)
     setSteady(false)
   }, [])
 
   const handleShutterRef = useRef<() => void>(() => {})
 
-  const onDetection = useCallback((corners: Point[] | null, now: number) => {
+  const onDetection = useCallback((raw: Point[] | null, now: number) => {
     const { w, h } = videoSizeRef.current
     const longSide = Math.max(w, h) || 1
 
+    // Raw detections flip between near-tied shapes on busy desks; show only the tracked quad.
+    const corners = trackerRef.current.update(raw, longSide)
     if (!corners) {
-      if (++missesRef.current < LOST_AFTER_MISSES) return
       targetRef.current = null
       anchorRef.current = null
       steadySinceRef.current = 0
@@ -301,7 +299,6 @@ function ScanScreen() {
       return
     }
 
-    missesRef.current = 0
     targetRef.current = corners
     if (!anchorRef.current || maxCornerShift(anchorRef.current, corners) > longSide * STEADY_TOLERANCE) {
       anchorRef.current = corners
@@ -347,7 +344,10 @@ function ScanScreen() {
             })
             // Some engines ignore resize options; derive the real scale from the result.
             const scale = frame.width / vw
-            const corners = await documentProcessor.detectCorners(frame)
+            const tracked = trackerRef.current.quad
+            const corners = await documentProcessor.detectCorners(frame, {
+              prior: tracked?.map((p) => ({ x: p.x * scale, y: p.y * scale })),
+            })
             if (stopped) break
             onDetection(corners?.map((p) => ({ x: p.x / scale, y: p.y / scale })) ?? null, performance.now())
           } catch (err) {
@@ -398,6 +398,8 @@ function ScanScreen() {
       const target = targetRef.current
       alpha = Math.max(0, Math.min(1, alpha + (target ? 0.2 : -0.12)))
       if (target) {
+        const snapAt = OUTLINE_SNAP * Math.max(videoSizeRef.current.w, videoSizeRef.current.h)
+        if (shown && snapAt > 0 && maxCornerShift(shown, target) > snapAt) shown = target
         shown = shown ? shown.map((p, i) => ({ x: p.x + (target[i].x - p.x) * OUTLINE_EASE, y: p.y + (target[i].y - p.y) * OUTLINE_EASE })) : target
       }
 

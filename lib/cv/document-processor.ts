@@ -42,7 +42,18 @@ export interface DetectionOptions {
   maxSide?: number;
   /** Minimum area fraction relative to total image area (default: 0.08) */
   minAreaFraction?: number;
+  /**
+   * Quad tracked on the previous frame (source-image coordinates, any order).
+   * It is always scored as a candidate, and candidates close to it get a bonus,
+   * so near-tied competitors (keyboard, a second sheet) can't flip the pick on noise.
+   */
+  prior?: Point[];
 }
+
+/** Score multiplier for candidates that match the prior. */
+const PRIOR_BONUS = 1.3;
+/** Max corner distance (fraction of the working long side) that counts as matching the prior. */
+const PRIOR_MATCH = 0.04;
 
 /**
  * Sorts four corner points into canonical order: [Top-Left, Top-Right, Bottom-Right, Bottom-Left].
@@ -709,6 +720,15 @@ export function detectDocumentCorners(
         }
     }
 
+    // --- 4) The quad tracked on the previous frame --------------------------
+    const prior =
+      options.prior?.length === 4
+        ? orderCorners(options.prior.map((p) => ({ x: Math.min(w - 1, Math.max(0, p.x * scale)), y: Math.min(h - 1, Math.max(0, p.y * scale)) })))
+        : null;
+    if (prior) candidates.unshift(prior);
+    const matchesPrior = (q: Vec[]) =>
+      !!prior && Math.max(...q.map((p, i) => Math.hypot(p.x - prior[i].x, p.y - prior[i].y))) <= PRIOR_MATCH * Math.max(w, h);
+
     // --- Score: cheap pass for all, full pass + refinement for the best ------
     // Many line combinations yield the same quad; score each shape once.
     const seen = new Set<string>();
@@ -718,7 +738,7 @@ export function detectDocumentCorners(
       if (seen.has(key)) continue;
       seen.add(key);
       if (!anglesOk(q)) continue;
-      const s = scoreQuad(q, maps, false);
+      const s = scoreQuad(q, maps, false) * (matchesPrior(q) ? PRIOR_BONUS : 1);
       if (s > 0) pre.push({ s, q });
     }
     if (!pre.length) return null;
@@ -739,7 +759,7 @@ export function detectDocumentCorners(
     for (const { q } of pre.slice(0, FULL_EVAL_TOP)) {
       for (const cand of [q, refineQuad(q, edgePts, maps)]) {
         if (!anglesOk(cand) || !isConvexQuad(cand)) continue;
-        const s = scoreQuad(cand, maps, true);
+        const s = scoreQuad(cand, maps, true) * (matchesPrior(cand) ? PRIOR_BONUS : 1);
         if (s > bestScore) {
           bestScore = s;
           best = cand;

@@ -29,6 +29,7 @@ export interface DetectCornersPayload extends BaseTaskPayload {
     epsilonFactor?: number;
     dilationKernelSize?: number;
     minAreaFraction?: number;
+    prior?: { x: number; y: number }[];
   };
 }
 
